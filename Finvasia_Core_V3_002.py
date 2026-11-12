@@ -26,6 +26,9 @@ Toots Feature :
 
 Market_Safety = 1
 
+# Shoonya algo identifier registered for this trading account.
+SHOONYA_ALGO_ID = "FA78603_U"
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -553,6 +556,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
             price=price,
             trigger_price=trigger_price,
             retention="DAY",
+            algo_id=SHOONYA_ALGO_ID,
             remarks="Python_Trader",
         )
     except Exception as exc:
@@ -849,12 +853,11 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","MARKET")
-                                                            tt.range(f"N{idx_location + 2}").value = None
-                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -870,11 +873,10 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
-                                                            tt.range(f"N{idx_location + 2}").value = None
-                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -893,11 +895,10 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[4])
-                                                            tt.range(f"N{idx_location + 2}").value = None
-                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -917,11 +918,10 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[4])
-                                                            tt.range(f"N{idx_location + 2}").value = None
-                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -1061,11 +1061,10 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","MARKET")
-                                                            tt.range(f"O{idx_location + 2}").value = None
-                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"O{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                             
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -1084,11 +1083,10 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
-                                                            tt.range(f"O{idx_location + 2}").value = None
-                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"O{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -1106,11 +1104,10 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[4])
-                                                            tt.range(f"O{idx_location + 2}").value = None
-                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"O{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -1128,12 +1125,11 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[4])
-                                                            tt.range(f"O{idx_location + 2}").value = None
-                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             
                                                             if order_id is None:
-                                                                pass
+                                                                tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
+                                                                tt.range(f"O{idx_location + 2}").value = None
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"R{idx_location + 2}").value = None
@@ -2856,6 +2852,7 @@ def CloseTrade():
                             price=price,
                             trigger_price=None,
                             retention="DAY",
+                            algo_id=SHOONYA_ALGO_ID,
                             remarks="Python_Trader_UserSelected_squareoff",
                         )
                     
@@ -2880,6 +2877,7 @@ def CloseTrade():
                             price=price,
                             trigger_price=None,
                             retention="DAY",
+                            algo_id=SHOONYA_ALGO_ID,
                             remarks="Python_Trader_UserSelected_squareoff",)
                         
                     except Exception as e:
@@ -2978,7 +2976,7 @@ def start_Open_Position():
                                     try:
                                         if not BROKER_LOGIN_OK or not internet_is_available() or SYSTEM_EXCEL_OK is False:
                                             raise RuntimeError("Live square-off blocked: broker login, internet or Excel unavailable")
-                                        api.place_order(buy_or_sell=buy_or_sell,product_type=product_type,exchange=exchange,tradingsymbol=tradingsymbol,quantity=quantity,discloseqty=0,price_type=price_type,price=price,trigger_price=None,retention="DAY",remarks=tag)
+                                        api.place_order(buy_or_sell=buy_or_sell,product_type=product_type,exchange=exchange,tradingsymbol=tradingsymbol,quantity=quantity,discloseqty=0,price_type=price_type,price=price,trigger_price=None,retention="DAY",remarks=tag,algo_id=SHOONYA_ALGO_ID)
                                     except Exception as e:
                                         print(f"squareoff can't be done for {df_openPosition['Symbol'][i]} with reason : {e}")
                                         pass
