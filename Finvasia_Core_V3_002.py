@@ -483,20 +483,23 @@ def event_handler_socket_closed():
     sleep(2)
     
 def order_status(orderid):
-    #print(f"Checking order_status for ({orderid})")
-    AverageExecutedPrice = 0
-    status = ''
+    """Return the broker status and average price, including partial fills."""
+    average_executed_price = 0
+    status = ""
     try:
         order_book = get_order_book()
-        order_book = order_book[order_book['Order No'] == str(orderid)]
-
-        status = order_book.iloc[0]["Status"]
-        if status == "COMPLETE":
-            AverageExecutedPrice = order_book.iloc[0]["Executed Price"]
+        order_book = order_book[order_book["Order No"].astype(str) == str(orderid)]
+        if not order_book.empty:
+            order = order_book.iloc[0]
+            status = str(order.get("Status", "") or "").strip().upper()
+            average_executed_price = order.get("Executed Price", 0) or 0
+            filled = float(order.get("Filled Shares", 0) or 0)
+            quantity = float(order.get("Quantity", 0) or 0)
+            if filled > 0 and quantity > 0 and filled < quantity and status not in ("COMPLETE", "REJECTED", "CANCELLED", "CANCELED"):
+                status = "PARTIAL (" + status + ")"
     except Exception as e:
-        Message = str(e) + " : Exception occur in order_status"
-        print(Message)
-    return status, AverageExecutedPrice
+        print(str(e) + " : Exception occur in order_status")
+    return status, average_executed_price
 
 def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, row_product_type = "__GLOBAL__", display_row=None):
     global api, BROKER_LOGIN_OK, SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK, feed_opened
@@ -725,6 +728,9 @@ LimitOrderBook = {}
 SIDE_ORDER_TRACKER = {}
 SIDE_ORDER_TRACKER_LOCK = Lock()
 SIDE_ORDER_UPDATES = {}
+# Per-row/per-side command latch. A visible BUY/SELL command is submitted once;
+# clearing the cell rearms that side. Accepted IDs also protect across restarts.
+SIDE_TRIGGER_STATE = {}
 
 
 
@@ -795,11 +801,18 @@ def update_side_order_display(order_id, status, executed_price=None, remarks=Non
         if not display_status or display_status == "PENDING":
             display_status = "PENDING"
         sheet.range(f"{status_col}{row_number}").value = display_status
-        if display_status == "COMPLETE" and executed_price not in (None, "", 0, "0"):
-            sheet.range(f"{price_col}{row_number}").value = executed_price
-        elif (display_status in ("REJECTED", "CANCELLED", "CANCELED") and remarks
-              and str(remarks).strip().upper() != display_status):
-            sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {remarks}"
+        # Shoonya avgprc is meaningful for both partial and complete fills.
+        if executed_price not in (None, "", 0, "0"):
+            try:
+                if float(executed_price) > 0:
+                    sheet.range(f"{price_col}{row_number}").value = float(executed_price)
+            except (TypeError, ValueError):
+                pass
+        if (display_status.startswith("REJECTED") or display_status.startswith("CANCELLED")
+                or display_status.startswith("CANCELED")) and remarks:
+            reason_text = str(remarks).strip()
+            if reason_text and reason_text.upper() not in display_status:
+                sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {reason_text}"
     except Exception as exc:
         print(f"Could not refresh side order {order_id}: {exc}")
 def register_pending_order(order_id):
@@ -825,6 +838,73 @@ def _is_terminal_trigger(value, side):
         return False
     return str(value).strip().upper() in (side, "TRUE", "1", "YES", "ON")
 
+
+
+def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_type,
+                                market_type, limit_price, ltp):
+    """Submit one visible side command once without modifying the command cell."""
+    side = str(side).strip().upper()
+    trigger_col = "O" if side == "BUY" else "U"
+    id_col, status_col, price_col = ("R", "S", "T") if side == "BUY" else ("X", "Y", "Z")
+    key = (int(row_number), side)
+    trigger = sheet.range(f"{trigger_col}{row_number}").value
+
+    if not _is_terminal_trigger(trigger, side):
+        SIDE_TRIGGER_STATE[key] = {"armed": False}
+        return
+
+    # On startup, a visible command with an existing order ID/status is treated
+    # as already attempted; never replay an order just because Python restarted.
+    if key not in SIDE_TRIGGER_STATE:
+        existing_id = sheet.range(f"{id_col}{row_number}").value
+        existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
+        if existing_id not in (None, "") or existing_status:
+            SIDE_TRIGGER_STATE[key] = {"armed": True, "recovered": True}
+            return
+    elif SIDE_TRIGGER_STATE[key].get("armed"):
+        return
+
+    # A clear-then-re-enter action is the user's explicit re-arm operation.
+    if key in SIDE_TRIGGER_STATE and not SIDE_TRIGGER_STATE[key].get("armed"):
+        sheet.range(f"{id_col}{row_number}").value = None
+        sheet.range(f"{status_col}{row_number}").value = None
+        sheet.range(f"{price_col}{row_number}").value = None
+
+    # Latch before calling the broker, including failed submissions, to prevent
+    # tight-loop duplicate orders. Clear the trigger cell to retry deliberately.
+    SIDE_TRIGGER_STATE[key] = {"armed": True, "attempted": True}
+    sheet.range(f"{status_col}{row_number}").value = "SUBMITTING"
+
+    try:
+        quantity = int(float(qty))
+        if quantity <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        market_type = str(market_type or "").strip().upper()
+        if market_type == "MARKET":
+            broker_order_type, order_price = "LIMIT", float(ltp)
+        elif market_type == "LIMIT":
+            broker_order_type, order_price = "LIMIT", float(limit_price)
+        elif market_type == "SL-LMT":
+            broker_order_type, order_price = "SL-M", float(limit_price)
+        else:
+            raise ValueError("Select MARKET, LIMIT or SL-LMT")
+        if order_price <= 0:
+            raise ValueError("A valid live LTP/limit/trigger price is required")
+
+        order_id = place_trade(
+            symbol, quantity, side, broker_order_type, order_price,
+            product_type, display_row=row_number
+        )
+        if order_id is None:
+            sheet.range(f"{status_col}{row_number}").value = "SUBMISSION FAILED/UNCONFIRMED"
+            return
+        register_pending_order(order_id)
+        sheet.range(f"{id_col}{row_number}").number_format = "@"
+        sheet.range(f"{id_col}{row_number}").value = str(order_id)
+        # Do not clear trigger_col: the user's command remains visible.
+    except Exception as exc:
+        sheet.range(f"{status_col}{row_number}").value = "INPUT/SUBMISSION ERROR: " + str(exc)
+        print(f"{side} command row {row_number} was not submitted: {exc}")
 
 
 def get_live_trade_sheet(workbook):
@@ -1010,35 +1090,15 @@ def start_Trade_Terminal():
                 ui = terminal_inputs[row_offset]
                 management = management_inputs[row_offset]
                 internal_row[0] = ui[0]                         # Qty (M)
-                if ui[2] not in (None, ""):
-                    internal_row[1] = ui[2]                     # BUY trigger (O)
-                elif internal_row[16] not in ("Entry_Pending", "Active", "Exit_Pending"):
-                    internal_row[1] = None
-                if ui[8] not in (None, ""):
-                    internal_row[2] = ui[8]                     # SELL trigger (U)
-                elif internal_row[16] not in ("Entry_Pending", "Active", "Exit_Pending"):
-                    internal_row[2] = None
+                # Manual BUY/SELL cells are dispatched independently below.
+                # Keep them out of the legacy single-position entry state machine.
+                internal_row[1] = None
+                internal_row[2] = None
                 internal_row[18] = ui[1]                        # Order Type (N)
                 internal_row[11] = management[0]                # Target (AA)
                 internal_row[12] = management[1]                # SL (AB)
                 internal_row[13] = management[2]                # Trail Enable (AC)
                 internal_row[14] = management[3]                # Latest SL (AD)
-                if _is_terminal_trigger(ui[2], "BUY"):
-                    market_type = str(ui[3] or "").strip().upper()
-                    internal_row[3] = {
-                        "MARKET": "True_Market",
-                        "LIMIT": "Limit_Below",
-                        "SL-LMT": "Limit_Above",
-                    }.get(market_type, ui[3])
-                    internal_row[4] = ui[4]
-                elif _is_terminal_trigger(ui[8], "SELL"):
-                    market_type = str(ui[9] or "").strip().upper()
-                    internal_row[3] = {
-                        "MARKET": "True_Market",
-                        "LIMIT": "Limit_Below",
-                        "SL-LMT": "Limit_Above",
-                    }.get(market_type, ui[9])
-                    internal_row[4] = ui[10]
             tt.range("BA4:BS1000").value = trading_info
             main_list = []
             indicator_list = []
@@ -1081,6 +1141,17 @@ def start_Trade_Terminal():
                             try:
                                 trade_info = trading_info[idx]
                                 excel_row = idx + 4
+                                ui_row = terminal_inputs[idx]
+                                current_ltp = convert_to_float(live_data[TokenKey].get("lp", 0))
+                                # Both sides are evaluated independently; neither command cell is cleared.
+                                dispatch_terminal_side_order(
+                                    tt, excel_row, i, "BUY", ui_row[0], ui_row[1],
+                                    ui_row[3], ui_row[4], current_ltp
+                                )
+                                dispatch_terminal_side_order(
+                                    tt, excel_row, i, "SELL", ui_row[0], ui_row[1],
+                                    ui_row[9], ui_row[10], current_ltp
+                                )
                                 #print(f" {i} : {trade_info}")
                                 has_new_trigger = (
                                     _is_terminal_trigger(trade_info[1], "BUY")
@@ -1535,6 +1606,8 @@ def start_Trade_Terminal():
             tt.range("b4:l1000").value = main_list
             tt.range("AG4:AN1000").value = indicator_list
             tt.range("AA4:AF1000").value = tt.range("BM4:BR1000").value
+            # Yield to Excel's UI/event queue; the previous tight loop starved typing.
+            sleep(0.15)
                 
         except Exception as e:
             #print(f"Exception : {str(e)}")
@@ -3288,14 +3361,11 @@ def start_Open_Position():
                 if value['status'] == 'PENDING':
                     status, Executed_price = order_status (key)
                     #print(f"filled_quantity = {filled_quantity},Executed_price={Executed_price}, status={status} ")
-                    if status == 'COMPLETE':
-                        value['status'] = 'COMPLETE'
+                    if status:
+                        value['status'] = status
+                    if Executed_price not in (None, "", 0, "0"):
                         value['Executed_price'] = Executed_price
-                    elif status in ['CANCELLED','CANCELED']:
-                        value['status'] = 'CANCELLED'
-                    elif status in ['REJECTED']:
-                        value['status'] = 'REJECTED'
-                    if status and status not in ("", "PENDING"):
+                    if status and status not in ("", "PENDING", "OPEN"):
                         value['Remarks'] = value.get('Remarks') or status
                 update_side_order_display(
                     key, value.get('status'), value.get('Executed_price'), value.get('Remarks')
