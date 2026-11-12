@@ -1155,6 +1155,22 @@ def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX
         print(f"Exception in LoadInstrument_token : {e}")
         pass
         
+OPTION_CHAIN_HEADERS = [
+    "CE OI", "CE Change OI", "CE Volume", "CE IV", "CE LTP",
+    "CE Change %", "CE Bid Qty", "CE Bid", "CE Ask", "CE Ask Qty",
+    "STRIKE",
+    "PE Bid Qty", "PE Bid", "PE Ask", "PE Ask Qty", "PE Change %",
+    "PE LTP", "PE IV", "PE Volume", "PE Change OI", "PE OI",
+]
+
+
+def prepare_option_chain_output(sheet):
+    """Replace legacy Greek headings and clear the old Greek output columns."""
+    sheet.range("A2:AE2").value = [OPTION_CHAIN_HEADERS + [None] * 10]
+    sheet.range("V2:AE500").clear_contents()
+    sheet.range("V3:AE500").clear_contents()
+
+
 def start_optionchain():
     global subscribe_symbol
     global live_data
@@ -1165,6 +1181,7 @@ def start_optionchain():
     excel_name = xw.Book(TerminalSheetName)
     oci = excel_name.sheets("Option_Chain_Input")
     Option_Chain_Output = excel_name.sheets("Option_Chain_Output")
+    prepare_option_chain_output(Option_Chain_Output)
     
 
     oci.range("F3").value = None
@@ -1687,21 +1704,11 @@ def start_optionchain():
                                 
                                 df_oc_pro.sort_values(by ='strike',inplace = True)
                                 
-                                df_oc_pro['CE_Delta'] = None
-                                df_oc_pro['CE_Gamma'] = None
-                                df_oc_pro['CE_Theta'] = None
-                                df_oc_pro['CE_Vega'] = None
-                                df_oc_pro['CE_Rho'] = None
                                 df_oc_pro['CE_IV'] = None
                                 
-                                df_oc_pro['PE_Delta'] = None
-                                df_oc_pro['PE_Gamma'] = None
-                                df_oc_pro['PE_Theta'] = None
-                                df_oc_pro['PE_Vega'] = None
-                                df_oc_pro['PE_Rho'] = None
                                 df_oc_pro['PE_IV'] = None
                     
-                                df_oc_pro = df_oc_pro.reindex(['CE_Delta','CE_Gamma','CE_Theta','CE_Vega','CE_Rho','CE_oi','CE_coi','CE_v','CE_IV','CE_lp','CE_pc','CE_bq1','CE_bp1','CE_sp1','CE_sq1','strike','PE_bq1','PE_bp1','PE_sp1','PE_sq1','PE_pc','PE_lp','PE_IV','PE_v','PE_coi','PE_oi','PE_Rho','PE_Vega','PE_Theta','PE_Gamma','PE_Delta'], axis=1)
+                                df_oc_pro = df_oc_pro.reindex(['CE_oi','CE_coi','CE_v','CE_IV','CE_lp','CE_pc','CE_bq1','CE_bp1','CE_sp1','CE_sq1','strike','PE_bq1','PE_bp1','PE_sp1','PE_sq1','PE_pc','PE_lp','PE_IV','PE_v','PE_coi','PE_oi'], axis=1)
                                 
                                 SpotPrice = convert_to_float(spot_ltp)
                                 FuturePrice = convert_to_float(future_ltp)
@@ -1743,18 +1750,8 @@ def start_optionchain():
                                     Greeks = IvGreeks.GetImpVolAndGreeks( StrikePrice = StrikePrice, StrikeCallPrice = StrikeCallPrice, StrikePutPrice = StrikePutPrice)
                                     #print(Greeks)
                                     
-                                    df_oc_pro['CE_Delta'][ind] = round(Greeks["CallDelta"],2)
-                                    df_oc_pro['CE_Gamma'][ind] = round(Greeks["Gamma"],4)
-                                    df_oc_pro['CE_Theta'][ind] = round(Greeks["Theta"],2)
-                                    df_oc_pro['CE_Vega'][ind] = round(Greeks["Vega"],2)
-                                    df_oc_pro['CE_Rho'][ind] = round(Greeks["RhoCall"],4)
                                     
                                     
-                                    df_oc_pro['PE_Delta'][ind] = round(Greeks["PutDelta"],2)
-                                    df_oc_pro['PE_Gamma'][ind] = round(Greeks["Gamma"],4)
-                                    df_oc_pro['PE_Theta'][ind] = round(Greeks["Theta"],2)
-                                    df_oc_pro['PE_Vega'][ind] = round(Greeks["Vega"],2)
-                                    df_oc_pro['PE_Rho'][ind] = round(Greeks["RhoPut"],4)
                                     
                                     if GreekMatch == "NSE":
                                         df_oc_pro['CE_IV'][ind] = round(Greeks["CallIV"],2)
@@ -1770,7 +1767,7 @@ def start_optionchain():
                                 if pre_selected_NoOfStrike != NoOfStrike:
                                     pre_selected_NoOfStrike = NoOfStrike
                                     Option_Chain_Output.range('a3:ae500').value = None
-                                    Option_Chain_Output.range(f"a3:AE500").color = (255,255,255)
+                                    Option_Chain_Output.range(f"a3:U500").color = (255,255,255)
                                     Option_Chain_Output.range(f"p3:p{2 * int(NoOfStrike) + 3}").color = (46,132,198) 
                                 
                                 df_oc_pro = df_oc_pro.reset_index(drop = True)
@@ -1778,7 +1775,7 @@ def start_optionchain():
                                 if NoOfStrike * 2 < len(df_oc_pro):
                                     df_oc_pro = df_oc_pro.iloc[ATM_pos - int(NoOfStrike) : ATM_pos + int(NoOfStrike) + 1]
                                     ATM_Row = int(NoOfStrike) + 3
-                                    Option_Chain_Output.range(f"a{ATM_Row}:AE{ATM_Row}").color = (46,132,198)
+                                    Option_Chain_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
                         
                                 Option_Chain_Output.range('a3').options(index=False,header=False).value = df_oc_pro
                                 
@@ -1892,6 +1889,7 @@ def start_optionchain_Pro():
     excel_name = xw.Book(TerminalSheetName)
     oci_pro = excel_name.sheets("Option_Chain_Pro_Input")
     Option_Chain_Pro_Output = excel_name.sheets("Option_Chain_Pro_Output")
+    prepare_option_chain_output(Option_Chain_Pro_Output)
     
 
     oci_pro.range("F3").value = None
@@ -2414,21 +2412,11 @@ def start_optionchain_Pro():
                                 
                                 df_oc_pro.sort_values(by ='strike',inplace = True)
                                 
-                                df_oc_pro['CE_Delta'] = None
-                                df_oc_pro['CE_Gamma'] = None
-                                df_oc_pro['CE_Theta'] = None
-                                df_oc_pro['CE_Vega'] = None
-                                df_oc_pro['CE_Rho'] = None
                                 df_oc_pro['CE_IV'] = None
                                 
-                                df_oc_pro['PE_Delta'] = None
-                                df_oc_pro['PE_Gamma'] = None
-                                df_oc_pro['PE_Theta'] = None
-                                df_oc_pro['PE_Vega'] = None
-                                df_oc_pro['PE_Rho'] = None
                                 df_oc_pro['PE_IV'] = None
                     
-                                df_oc_pro = df_oc_pro.reindex(['CE_Delta','CE_Gamma','CE_Theta','CE_Vega','CE_Rho','CE_oi','CE_coi','CE_v','CE_IV','CE_lp','CE_pc','CE_bq1','CE_bp1','CE_sp1','CE_sq1','strike','PE_bq1','PE_bp1','PE_sp1','PE_sq1','PE_pc','PE_lp','PE_IV','PE_v','PE_coi','PE_oi','PE_Rho','PE_Vega','PE_Theta','PE_Gamma','PE_Delta'], axis=1)
+                                df_oc_pro = df_oc_pro.reindex(['CE_oi','CE_coi','CE_v','CE_IV','CE_lp','CE_pc','CE_bq1','CE_bp1','CE_sp1','CE_sq1','strike','PE_bq1','PE_bp1','PE_sp1','PE_sq1','PE_pc','PE_lp','PE_IV','PE_v','PE_coi','PE_oi'], axis=1)
                                 
                                 SpotPrice = convert_to_float(spot_ltp)
                                 FuturePrice = convert_to_float(future_ltp)
@@ -2470,18 +2458,8 @@ def start_optionchain_Pro():
                                     Greeks = IvGreeks.GetImpVolAndGreeks( StrikePrice = StrikePrice, StrikeCallPrice = StrikeCallPrice, StrikePutPrice = StrikePutPrice)
                                     #print(Greeks)
                                     
-                                    df_oc_pro['CE_Delta'][ind] = round(Greeks["CallDelta"],2)
-                                    df_oc_pro['CE_Gamma'][ind] = round(Greeks["Gamma"],4)
-                                    df_oc_pro['CE_Theta'][ind] = round(Greeks["Theta"],2)
-                                    df_oc_pro['CE_Vega'][ind] = round(Greeks["Vega"],2)
-                                    df_oc_pro['CE_Rho'][ind] = round(Greeks["RhoCall"],4)
                                     
                                     
-                                    df_oc_pro['PE_Delta'][ind] = round(Greeks["PutDelta"],2)
-                                    df_oc_pro['PE_Gamma'][ind] = round(Greeks["Gamma"],4)
-                                    df_oc_pro['PE_Theta'][ind] = round(Greeks["Theta"],2)
-                                    df_oc_pro['PE_Vega'][ind] = round(Greeks["Vega"],2)
-                                    df_oc_pro['PE_Rho'][ind] = round(Greeks["RhoPut"],4)
                                     
                                     if GreekMatch == "NSE":
                                         df_oc_pro['CE_IV'][ind] = round(Greeks["CallIV"],2)
@@ -2497,7 +2475,7 @@ def start_optionchain_Pro():
                                 if pre_selected_NoOfStrike != NoOfStrike:
                                     pre_selected_NoOfStrike = NoOfStrike
                                     Option_Chain_Pro_Output.range('a3:ae500').value = None
-                                    Option_Chain_Pro_Output.range(f"a3:AE500").color = (255,255,255)
+                                    Option_Chain_Pro_Output.range(f"a3:U500").color = (255,255,255)
                                     Option_Chain_Pro_Output.range(f"p3:p{2 * int(NoOfStrike) + 3}").color = (46,132,198) 
                                 
                                 df_oc_pro = df_oc_pro.reset_index(drop = True)
@@ -2505,7 +2483,7 @@ def start_optionchain_Pro():
                                 if NoOfStrike * 2 < len(df_oc_pro):
                                     df_oc_pro = df_oc_pro.iloc[ATM_pos - int(NoOfStrike) : ATM_pos + int(NoOfStrike) + 1]
                                     ATM_Row = int(NoOfStrike) + 3
-                                    Option_Chain_Pro_Output.range(f"a{ATM_Row}:AE{ATM_Row}").color = (46,132,198)
+                                    Option_Chain_Pro_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
                         
                                 Option_Chain_Pro_Output.range('a3').options(index=False,header=False).value = df_oc_pro
                                 
