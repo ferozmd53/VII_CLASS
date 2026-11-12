@@ -237,7 +237,12 @@ def Shoonya_login():
     global logger, userid, client_name
     client_name = ""
     isConnected = 0
-    excel_name = xw.Book(TerminalSheetName)
+    try:
+        excel_name = xw.Book(TerminalSheetName)
+    except Exception as exc:
+        print(f"Excel workbook could not be opened: {exc}")
+        Text2Speech("Warning. Excel workbook is unavailable. Shoonya login cannot start.")
+        return 0
 
     try:
         os.environ["SHOONYA_WORKBOOK_PATH"] = os.path.abspath(TerminalSheetName)
@@ -2608,7 +2613,7 @@ def start_optionchain_Pro():
 
 def CloseTrade():
     global api, BROKER_LOGIN_OK
-    if not BROKER_LOGIN_OK or SYSTEM_INTERNET_OK is False or SYSTEM_EXCEL_OK is False:
+    if not BROKER_LOGIN_OK or not internet_is_available() or SYSTEM_EXCEL_OK is False:
         Text2Speech("Square off blocked. Broker login, internet or Excel is unavailable.")
         return
     print("I am inside CloseTrade")
@@ -2761,7 +2766,7 @@ def start_Open_Position():
                                     price = 0.0
                                     #print(f"squareoff {tradingsymbol}  {exchange} {product} {quantity}{transaction_type}")
                                     try:
-                                        if not BROKER_LOGIN_OK or SYSTEM_INTERNET_OK is False or SYSTEM_EXCEL_OK is False:
+                                        if not BROKER_LOGIN_OK or not internet_is_available() or SYSTEM_EXCEL_OK is False:
                                             raise RuntimeError("Live square-off blocked: broker login, internet or Excel unavailable")
                                         api.place_order(buy_or_sell=buy_or_sell,product_type=product_type,exchange=exchange,tradingsymbol=tradingsymbol,quantity=quantity,discloseqty=0,price_type=price_type,price=price,trigger_price=None,retention="DAY",remarks=tag)
                                     except Exception as e:
