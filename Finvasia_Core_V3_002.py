@@ -849,6 +849,7 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","MARKET")
                                                             tt.range(f"N{idx_location + 2}").value = None
+                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             
                                                             if order_id is None:
                                                             else:    
@@ -868,6 +869,7 @@ def start_Trade_Terminal():
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
                                                             tt.range(f"N{idx_location + 2}").value = None
+                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             if order_id is None:
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
@@ -889,6 +891,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[4])
                                                             tt.range(f"N{idx_location + 2}").value = None
+                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             if order_id is None:
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
@@ -911,6 +914,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[4])
                                                             tt.range(f"N{idx_location + 2}").value = None
+                                                            tt.range(f"O{idx_location + 2}").value = None
                                                             if order_id is None:
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
@@ -1053,6 +1057,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","MARKET")
                                                             tt.range(f"O{idx_location + 2}").value = None
+                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             if order_id is None:
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
@@ -1074,6 +1079,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
                                                             tt.range(f"O{idx_location + 2}").value = None
+                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             if order_id is None:
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
@@ -1094,6 +1100,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[4])
                                                             tt.range(f"O{idx_location + 2}").value = None
+                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             if order_id is None:
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
@@ -1114,6 +1121,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[4])
                                                             tt.range(f"O{idx_location + 2}").value = None
+                                                            tt.range(f"N{idx_location + 2}").value = None
                                                             
                                                             if order_id is None:
                                                             else: 
