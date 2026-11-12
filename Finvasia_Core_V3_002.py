@@ -208,20 +208,20 @@ def Shoonya_login():
         api = login_with_excel(excel_name, auth_code_provider=get_auth_code)
         if api is None:
             login_sheet.range("C2").value = "Shoonya OAuth login failed. Check LOGIN sheet."
-            Credential_sheet.range("C2").color = (255, 0, 0)
+            login_sheet.range("C2").color = (255, 0, 0)
             return 0
 
         login_status = api.get_limits()
         if not isinstance(login_status, dict) or str(login_status.get("stat", "")).lower() != "ok":
             print(f"Shoonya session validation failed: {login_status}")
-            Credential_sheet.range("C2").value = "Shoonya session validation failed."
-            Credential_sheet.range("C2").color = (255, 0, 0)
+            login_sheet.range("C2").value = "Shoonya session validation failed."
+            login_sheet.range("C2").color = (255, 0, 0)
             return 0
 
         userid = str(login_sheet.range("B3").value or "").strip()
         client_name = userid
-        Credential_sheet.range("C2").value = "Login Successful, Welcome " + client_name + "\nOAuth session reused/saved in LOGIN and SESSION sheets."
-        Credential_sheet.range("C2").color = (118, 224, 180)
+        login_sheet.range("C2").value = "Login Successful, Welcome " + client_name + "\nOAuth session reused/saved in LOGIN and SESSION sheets."
+        login_sheet.range("C2").color = (118, 224, 180)
         Text2Speech("Shoonya login successful")
         excel_name.save()
         isConnected = 1
@@ -230,8 +230,8 @@ def Shoonya_login():
     except Exception as exc:
         print(f"Shoonya OAuth login error: {exc}")
         try:
-            Credential_sheet.range("C2").value = "Login failed: " + str(exc)
-            Credential_sheet.range("C2").color = (255, 0, 0)
+            login_sheet.range("C2").value = "Login failed: " + str(exc)
+            login_sheet.range("C2").color = (255, 0, 0)
         except Exception:
             pass
         return 0
