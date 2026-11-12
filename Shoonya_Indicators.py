@@ -1,11 +1,15 @@
 """Daily TradingView-style indicators integrated into the Finvasia terminal.
 
+Historical candle downloads run in background workers so the Excel live-data loop
+and Shoonya WebSocket callback are not held up by history requests.
+
 Outputs are written to Trade_Terminal!AD:AK:
 RSI, StochRSI, SMA Stoch, BB Upper, BB Middle, BB Lower, BUY Signal, SELL Signal.
 """
 import json
 import time
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
@@ -16,6 +20,8 @@ class IndicatorEngine:
         self.retry_seconds = retry_seconds
         self.history = {}
         self.retry_at = {}
+        self.pending = {}
+        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ShoonyaHistory")
         self.last_ltp = {}
         self.last_result = {}
         self.length_rsi = 14
@@ -29,10 +35,8 @@ class IndicatorEngine:
     def _empty():
         return [None, None, None, None, None, None, "", ""]
 
-    def _load_history(self, api, exchange, symbol, key):
+    def _fetch_history(self, api, exchange, symbol, key):
         now = time.time()
-        if now < self.retry_at.get(key, 0):
-            return None
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=self.load_days)
@@ -72,13 +76,41 @@ class IndicatorEngine:
             if len(frame) < self.length_bb + 2:
                 self.retry_at[key] = now + self.retry_seconds
                 return None
-            self.history[key] = frame
             self.retry_at[key] = now + self.retry_seconds
             return frame
         except Exception as exc:
             print(f"Daily indicator history unavailable for {exchange}:{symbol}: {exc}")
             self.retry_at[key] = now + self.retry_seconds
             return None
+
+    def _request_history(self, api, exchange, symbol, key):
+        if key in self.pending or time.time() < self.retry_at.get(key, 0):
+            return
+        self.pending[key] = self.executor.submit(
+            self._fetch_history, api, exchange, symbol, key
+        )
+
+    def _get_history_without_waiting(self, api, exchange, symbol, key):
+        frame = self.history.get(key)
+        if frame is not None:
+            return frame
+
+        future = self.pending.get(key)
+        if future is None:
+            self._request_history(api, exchange, symbol, key)
+            return None
+        if not future.done():
+            return None
+
+        self.pending.pop(key, None)
+        try:
+            frame = future.result()
+        except Exception as exc:
+            print(f"Indicator history worker failed for {exchange}:{symbol}: {exc}")
+            frame = None
+        if frame is not None:
+            self.history[key] = frame
+        return frame
 
     def _calculate(self, closes):
         close = pd.Series(closes, dtype="float64")
@@ -118,9 +150,7 @@ class IndicatorEngine:
         if self.last_ltp.get(key) == ltp and key in self.last_result:
             return self.last_result[key]
 
-        frame = self.history.get(key)
-        if frame is None:
-            frame = self._load_history(api, exchange, symbol, key)
+        frame = self._get_history_without_waiting(api, exchange, symbol, key)
         if frame is None or frame.empty:
             return self._empty()
 
