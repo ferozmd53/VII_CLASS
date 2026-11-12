@@ -667,13 +667,21 @@ def _is_terminal_trigger(value, side):
 
 
 def get_live_trade_sheet(workbook):
-    """Return LIVE_TRADE, migrating the previous Trade_Terminal tab name."""
+    """Return LIVE_TRADE and permanently rename the old worksheet on first run."""
     try:
         return workbook.sheets("LIVE_TRADE")
     except Exception:
-        old_sheet = workbook.sheets("Trade_Terminal")
-        old_sheet.name = "LIVE_TRADE"
-        return old_sheet
+        try:
+            old_sheet = workbook.sheets("Trade_Terminal")
+            old_sheet.name = "LIVE_TRADE"
+            try:
+                workbook.save()
+            except Exception as save_error:
+                print(f"LIVE_TRADE renamed in Excel but workbook save failed: {save_error}")
+            return old_sheet
+        except Exception:
+            # Another worker may have completed the rename at the same time.
+            return workbook.sheets("LIVE_TRADE")
 
 
 def start_Trade_Terminal():
