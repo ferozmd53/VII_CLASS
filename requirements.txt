@@ -1,0 +1,9 @@
+requests
+pyotp
+xlwings
+pyttsx3
+pandas
+numpy
+websocket-client
+NorenRestApiOAuth
+NorenRestApiPy
