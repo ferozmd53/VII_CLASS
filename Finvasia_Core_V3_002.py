@@ -21,7 +21,7 @@ Toots Feature :
 4. Tool has voice and telegram notification/alert feature.
 5. Tools have orderbook sheet where you can cancel any open orders.
 6. Tools have openposition sheet where you can exit any/all running trade.
-7. Tools has two option chain and each option chain contains live data with option greeks.
+7. Both option chains show live market data and implied volatility (IV); Greek columns are removed.
 """
 
 Market_Safety = 1
