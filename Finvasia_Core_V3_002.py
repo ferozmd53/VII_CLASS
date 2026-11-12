@@ -1041,7 +1041,7 @@ def start_Trade_Terminal():
                                                             
                                                         tt.range(f"X{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
-                                            if _is_terminal_trigger(trade_info[2], "SELL") and LTP != 0:
+                                            elif _is_terminal_trigger(trade_info[2], "SELL") and LTP != 0:
                                                 
                                                 if trade_info[3] in ['True_Market' , 'True_Limit_LTP' , 'Limit_Below' , 'Limit_Above']:
                                                     #0:Qty    1:BUY/SELL    2:Entry_Signal  3:Entry_Limit_Price  4:Entry_Done@  5:Entry_Order_ID 6: Entry_Remarks  7:Exit_Signal 8:Exit_Done @ 9:Exit_Order_ID   10:Target    11:SL  12:Trail Enable 13: Latest_SL 14:Trade_status 15: PnL
