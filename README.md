@@ -4,13 +4,12 @@ Educational and research software. Trading involves financial risk; verify every
 
 ## Installation
 
-1. Download or clone this repository.
-2. Install Python 3.11–3.13 (64-bit) and Microsoft Excel.
-3. Open Command Prompt in this folder and run:
+Install Python 3.11–3.13 (64-bit) and Microsoft Excel.
 
-```bat
+Open Command Prompt and run:
+
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install git+https://github.com/ferozmd53/VII_CLASS.git
 ```
 
 ## Login setup
