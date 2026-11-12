@@ -427,12 +427,15 @@ def order_status(orderid):
     return status, AverageExecutedPrice
 
 def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
-    global api, BROKER_LOGIN_OK, SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK
+    global api, BROKER_LOGIN_OK, SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK, feed_opened
     if not BROKER_LOGIN_OK:
         print("Live order blocked: Shoonya login is not active.")
         return None
     if SYSTEM_INTERNET_OK is False or not internet_is_available():
         print("Live order blocked: internet is unavailable.")
+        return None
+    if not feed_opened:
+        print("Live order blocked: Shoonya WebSocket is disconnected.")
         return None
     if SYSTEM_EXCEL_OK is False:
         print("Live order blocked: Excel workbook is unavailable.")
