@@ -44,11 +44,13 @@ import logging
 from threading import Thread
 import numpy as np
 
-# NumPy 2.0 removed the legacy np.PINF alias.
-# The upstream GetIVGreeks option-chain module still references it.
-# Restore the alias before importing/loading that module for compatibility.
+# NumPy 2.0 removed the legacy positive/negative infinity aliases.
+# The upstream GetIVGreeks option-chain module still references both.
+# Restore them before importing/loading that module for compatibility.
 if not hasattr(np, "PINF"):
     np.PINF = np.inf
+if not hasattr(np, "NINF"):
+    np.NINF = -np.inf
 
 try:
     import pandas as pd
@@ -149,6 +151,33 @@ def Text2Speech(Text):
 Text2Speech("Welcome to python trader trade terminal tool, have a nice day. Hope u r enjoying our work")
 
 
+def get_login_settings_sheet(workbook):
+    """Use LOGIN as the single settings sheet and migrate legacy sheets once."""
+    sheet_names = [sheet.name for sheet in workbook.sheets]
+    login_sheet = workbook.sheets["LOGIN"] if "LOGIN" in sheet_names else workbook.sheets.add("LOGIN")
+
+    # Migrate the complete legacy Config used range to LOGIN starting at D1.
+    # Existing LOGIN credentials in columns A:B are left untouched.
+    if str(login_sheet.range("C1").value or "") != "LOGIN_SETTINGS_MIGRATED_V1":
+        if "Config" in sheet_names:
+            try:
+                workbook.sheets["Config"].used_range.copy(destination=login_sheet.range("D1"))
+                print("Migrated Config sheet settings into LOGIN (starting at column D).")
+            except Exception as exc:
+                print(f"Config migration warning: {exc}")
+        # Preserve legacy Telegram settings without relying on User_Credential.
+        if "User_Credential" in sheet_names:
+            legacy = workbook.sheets["User_Credential"]
+            if not login_sheet.range("AZ2").value:
+                login_sheet.range("AZ2").value = legacy.range("B10").value
+            if not login_sheet.range("AZ3").value:
+                login_sheet.range("AZ3").value = legacy.range("B11").value
+        login_sheet.range("C1").value = "LOGIN_SETTINGS_MIGRATED_V1"
+        workbook.save()
+
+    return login_sheet
+
+
 def Shoonya_login():
     global api, TelegramBotCredential, ReceiverTelegramID
     global logger, userid, client_name
@@ -158,8 +187,7 @@ def Shoonya_login():
 
     try:
         os.environ["SHOONYA_WORKBOOK_PATH"] = os.path.abspath(TerminalSheetName)
-        Credential_sheet = excel_name.sheets["User_Credential"]
-        login_sheet = excel_name.sheets["LOGIN"] if "LOGIN" in [s.name for s in excel_name.sheets] else excel_name.sheets.add("LOGIN")
+        login_sheet = get_login_settings_sheet(excel_name)
 
         userid = str(login_sheet.range("B3").value or "").strip()
         client_name = userid or "Shoonya User"
@@ -171,15 +199,15 @@ def Shoonya_login():
         logger = logging.getLogger()
         logger.setLevel(logging.INFO)
 
-        TelegramBotCredential = str(Credential_sheet.range("B10").value or "")
-        ReceiverTelegramID = str(Credential_sheet.range("B11").value or "")
+        TelegramBotCredential = str(login_sheet.range("AZ2").value or "")
+        ReceiverTelegramID = str(login_sheet.range("AZ3").value or "")
         if "." in ReceiverTelegramID:
             ReceiverTelegramID = ReceiverTelegramID.split(".")[0]
 
         print("Connecting to Shoonya using reusable OAuth session...")
         api = login_with_excel(excel_name, auth_code_provider=get_auth_code)
         if api is None:
-            Credential_sheet.range("C2").value = "Shoonya OAuth login failed. Check LOGIN sheet."
+            login_sheet.range("C2").value = "Shoonya OAuth login failed. Check LOGIN sheet."
             Credential_sheet.range("C2").color = (255, 0, 0)
             return 0
 
@@ -2867,15 +2895,15 @@ def start_Open_Position():
     op_op = excel_op.sheets("OpenPosition")
     op_tt = excel_op.sheets("Trade_Terminal")
     op_hold = excel_op.sheets("Holdings")
-    op_config = excel_op.sheets("Config")
+    op_config = get_login_settings_sheet(excel_op)
     op_ob = excel_op.sheets("OrderBook")
     
     isTelegramEnable = False
-    if op_config.range("b3").value == True:
+    if op_config.range("E3").value == True:
         isTelegramEnable = True
     
     isVoiceEnable = False
-    if op_config.range("b6").value == True:
+    if op_config.range("E6").value == True:
         isVoiceEnable = True
         
     op_op.range(f"d2").value = False
@@ -3054,20 +3082,20 @@ def getholdings():
     
 def StartThread():
     excel_name = xw.Book(TerminalSheetName)
-    Config_sheet = excel_name.sheets['Config']
+    Config_sheet = get_login_settings_sheet(excel_name)
     try:
         
         # Define the threads and put them in an array
         threads = []
         
-        if Config_sheet.range("b2").value == True:
+        if Config_sheet.range("E2").value == True:
             threads.append(Thread(target=start_Trade_Terminal))
             threads.append(Thread(target=start_Open_Position))      
            
-        if Config_sheet.range("b4").value == True:
+        if Config_sheet.range("E4").value == True:
             threads.append(Thread(target=start_optionchain))
         
-        if Config_sheet.range("b5").value == True:
+        if Config_sheet.range("E5").value == True:
             threads.append(Thread(target=start_optionchain_Pro))
             
         if len(threads) != 0 :    
