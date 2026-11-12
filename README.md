@@ -43,15 +43,31 @@ The access token is stored in `LOGIN!B8:B14` and a hidden `SESSION` sheet. Keep 
 
 ## Live-only trading and alerts
 
-- The trade terminal forces Trade_Terminal!S2 to REAL; paper/simulated fills are removed.
+- The live trade sheet is named `LIVE_TRADE` (the previous `Trade_Terminal` tab is renamed automatically on first startup). The terminal forces `LIVE_TRADE!S2` to REAL; paper/simulated fills are removed.
 - A live order is blocked when Shoonya login is not active, internet is unavailable, or the Excel workbook is not accessible.
 - Voice alerts announce login failure, internet loss/recovery, Excel workbook disconnect/recovery, and WebSocket disconnect/connection failure.
 - The Standard and PRO option-chain outputs retain IV and market data. Delta, Gamma, Theta, Vega and Rho columns are removed.
 - Excel disconnect alerts require the Python terminal process to remain running. If Windows terminates Python itself, that process cannot speak an alert.
 
+## LIVE_TRADE columns
+
+| Columns | Purpose |
+|---|---|
+| M | Quantity |
+| N | BUY Trigger — enter `BUY` |
+| O | SELL Trigger — enter `SELL` |
+| P | Entry Signal / order type |
+| Q | Entry Limit Price |
+| R:S:T | Entry fill price, order ID and remarks |
+| U:X | Exit signal, fill price, order ID and remarks |
+| Y:AD | Target, SL, trailing settings, trade status and PnL |
+| AE:AL | RSI, StochRSI, SMA Stoch, Bollinger Bands and signal columns |
+
+The old BUY/SELL dropdown is removed. Enter `BUY` in column N or `SELL` in column O; the selected trigger is cleared after the order submission attempt. Entry Signal and Entry Limit Price remain separate inputs.
+
 ## Indicators
 
-The Finvasia terminal remains the main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `Trade_Terminal` columns `AD:AK`, using the same daily historical-data and indicator formulas as the Shoonya indicator project. Daily indicator history is currently enabled for NSE symbols, matching the original indicator implementation; other exchanges continue to receive the Finvasia live terminal data.
+The Finvasia terminal remains the main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AE:AL`, using the same daily historical-data and indicator formulas as the Shoonya indicator project. Daily indicator history is currently enabled for NSE symbols, matching the original indicator implementation; other exchanges continue to receive the Finvasia live terminal data.
 
 ## Start
 
