@@ -1898,11 +1898,11 @@ def start_optionchain():
                                     
                                     
                                     if GreekMatch == "NSE":
-                                        df_oc_pro['CE_IV'][ind] = round(Greeks["CallIV"],2)
-                                        df_oc_pro['PE_IV'][ind] = round(Greeks["PutIV"],2)
+                                        df_oc_pro.at[ind, "CE_IV"] = round(Greeks["CallIV"],2)
+                                        df_oc_pro.at[ind, "PE_IV"] = round(Greeks["PutIV"],2)
                                     else:
-                                        df_oc_pro['CE_IV'][ind] = round(Greeks["ImplVol"],2)
-                                        df_oc_pro['PE_IV'][ind] = round(Greeks["ImplVol"],2)
+                                        df_oc_pro.at[ind, "CE_IV"] = round(Greeks["ImplVol"],2)
+                                        df_oc_pro.at[ind, "PE_IV"] = round(Greeks["ImplVol"],2)
                                 
                                 del IvGreeks
                                 df_oc_pro.round({"CE_lp":2, 'PE_lp':2})
@@ -2615,11 +2615,11 @@ def start_optionchain_Pro():
                                     
                                     
                                     if GreekMatch == "NSE":
-                                        df_oc_pro['CE_IV'][ind] = round(Greeks["CallIV"],2)
-                                        df_oc_pro['PE_IV'][ind] = round(Greeks["PutIV"],2)
+                                        df_oc_pro.at[ind, "CE_IV"] = round(Greeks["CallIV"],2)
+                                        df_oc_pro.at[ind, "PE_IV"] = round(Greeks["PutIV"],2)
                                     else:
-                                        df_oc_pro['CE_IV'][ind] = round(Greeks["ImplVol"],2)
-                                        df_oc_pro['PE_IV'][ind] = round(Greeks["ImplVol"],2)
+                                        df_oc_pro.at[ind, "CE_IV"] = round(Greeks["ImplVol"],2)
+                                        df_oc_pro.at[ind, "PE_IV"] = round(Greeks["ImplVol"],2)
                                 
                                 del IvGreeks
                                 df_oc_pro.round({"CE_lp":2, 'PE_lp':2})
