@@ -46,8 +46,10 @@ from time import sleep
 import logging
 import socket
 from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor
 
 voice_lock = Lock()
+LIVE_DATA_LOCK = Lock()
 SYSTEM_INTERNET_OK = None
 SYSTEM_EXCEL_OK = None
 BROKER_LOGIN_OK = False
@@ -433,14 +435,13 @@ def event_handler_quote_update(inmessage):
     # print(message)
     key = inmessage["e"] + "|" + inmessage["tk"]
 
-    if key in SYMBOLDICT:
-        symbol_info = SYMBOLDICT[key]
+    # Keep quote ingestion short and independent from Excel/order workers.
+    # Replace the snapshot atomically so readers never see a half-updated OHLC tick.
+    with LIVE_DATA_LOCK:
+        symbol_info = dict(SYMBOLDICT.get(key, {}))
         symbol_info.update(message)
         SYMBOLDICT[key] = symbol_info
         live_data[key] = symbol_info
-    else:
-        SYMBOLDICT[key] = message
-        live_data[key] = message
 
 def event_handler_order_update(tick_data):
     """Apply broker push updates to the exact order row when the ID is known."""
@@ -731,6 +732,13 @@ SIDE_ORDER_UPDATES = {}
 # Per-row/per-side command latch. A visible BUY/SELL command is submitted once;
 # clearing the cell rearms that side. Accepted IDs also protect across restarts.
 SIDE_TRIGGER_STATE = {}
+SIDE_TRIGGER_STATE_LOCK = Lock()
+
+# Manual BUY/SELL requests run outside the market-data/Excel refresh loop.
+# Multiple workers ensure one slow broker request cannot hold up other symbols.
+SIDE_ORDER_EXECUTOR = ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="ShoonyaSideOrder"
+)
 
 
 
@@ -840,45 +848,26 @@ def _is_terminal_trigger(value, side):
 
 
 
-def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_type,
-                                market_type, limit_price, ltp):
-    """Submit one visible side command once without modifying the command cell."""
-    side = str(side).strip().upper()
-    trigger_col = "O" if side == "BUY" else "U"
-    id_col, status_col, price_col = ("R", "S", "T") if side == "BUY" else ("X", "Y", "Z")
-    key = (int(row_number), side)
-    trigger = sheet.range(f"{trigger_col}{row_number}").value
-
-    if not _is_terminal_trigger(trigger, side):
-        SIDE_TRIGGER_STATE[key] = {"armed": False}
-        return
-
-    # On startup, a visible command with an existing order ID/status is treated
-    # as already attempted; never replay an order just because Python restarted.
-    if key not in SIDE_TRIGGER_STATE:
-        existing_id = sheet.range(f"{id_col}{row_number}").value
-        existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
-        if existing_id not in (None, "") or existing_status:
-            SIDE_TRIGGER_STATE[key] = {"armed": True, "recovered": True}
-            return
-    elif SIDE_TRIGGER_STATE[key].get("armed"):
-        return
-
-    # A clear-then-re-enter action is the user's explicit re-arm operation.
-    if key in SIDE_TRIGGER_STATE and not SIDE_TRIGGER_STATE[key].get("armed"):
-        sheet.range(f"{id_col}{row_number}").value = None
-        sheet.range(f"{status_col}{row_number}").value = None
-        sheet.range(f"{price_col}{row_number}").value = None
-
-    # Latch before calling the broker, including failed submissions, to prevent
-    # tight-loop duplicate orders. Clear the trigger cell to retry deliberately.
-    SIDE_TRIGGER_STATE[key] = {"armed": True, "attempted": True}
-    sheet.range(f"{status_col}{row_number}").value = "SUBMITTING"
-
+def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
+                                  market_type, limit_price, ltp):
+    """Submit one side order on a worker thread; never block the quote refresh loop."""
+    pythoncom = None
     try:
+        # xlwings uses COM on Windows; initialize COM for this worker when available.
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pythoncom = None
+
+        sheet = get_live_trade_sheet(get_terminal_workbook())
+        id_col, status_col = ("R", "S") if side == "BUY" else ("X", "Y")
+        sheet.range(f"{status_col}{row_number}").value = "SUBMITTING"
+
         quantity = int(float(qty))
         if quantity <= 0:
             raise ValueError("Quantity must be greater than zero")
+
         market_type = str(market_type or "").strip().upper()
         if market_type == "MARKET":
             broker_order_type, order_price = "LIMIT", float(ltp)
@@ -888,7 +877,8 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
             broker_order_type, order_price = "SL-M", float(limit_price)
         else:
             raise ValueError("Select MARKET, LIMIT or SL-LMT")
-        if order_price <= 0:
+
+        if not np.isfinite(order_price) or order_price <= 0:
             raise ValueError("A valid live LTP/limit/trigger price is required")
 
         order_id = place_trade(
@@ -897,14 +887,75 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
         )
         if order_id is None:
             sheet.range(f"{status_col}{row_number}").value = "SUBMISSION FAILED/UNCONFIRMED"
+            print(f"{side} order for {symbol} was not confirmed; check Shoonya OrderBook before retrying.")
             return
+
         register_pending_order(order_id)
         sheet.range(f"{id_col}{row_number}").number_format = "@"
         sheet.range(f"{id_col}{row_number}").value = str(order_id)
-        # Do not clear trigger_col: the user's command remains visible.
+        print(f"{side} order worker completed for {symbol}: {order_id}")
+        # The BUY/SELL command cell is deliberately not cleared.
+
     except Exception as exc:
-        sheet.range(f"{status_col}{row_number}").value = "INPUT/SUBMISSION ERROR: " + str(exc)
-        print(f"{side} command row {row_number} was not submitted: {exc}")
+        try:
+            sheet = get_live_trade_sheet(get_terminal_workbook())
+            status_col = "S" if side == "BUY" else "Y"
+            sheet.range(f"{status_col}{row_number}").value = "INPUT/SUBMISSION ERROR: " + str(exc)
+        except Exception:
+            pass
+        print(f"{side} command for {symbol}, row {row_number}, failed: {exc}")
+    finally:
+        try:
+            if pythoncom is not None:
+                pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+
+def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_type,
+                                market_type, limit_price, ltp):
+    """Latch a row/side command and queue it without waiting for the broker."""
+    side = str(side).strip().upper()
+    trigger_col = "O" if side == "BUY" else "U"
+    id_col, status_col, price_col = (("R", "S", "T") if side == "BUY"
+                                    else ("X", "Y", "Z"))
+    key = (int(row_number), side)
+    trigger = sheet.range(f"{trigger_col}{row_number}").value
+
+    if not _is_terminal_trigger(trigger, side):
+        with SIDE_TRIGGER_STATE_LOCK:
+            SIDE_TRIGGER_STATE[key] = {"armed": False}
+        return
+
+    with SIDE_TRIGGER_STATE_LOCK:
+        state = SIDE_TRIGGER_STATE.get(key)
+        if state is None:
+            existing_id = sheet.range(f"{id_col}{row_number}").value
+            existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
+            if existing_id not in (None, "") or existing_status:
+                SIDE_TRIGGER_STATE[key] = {"armed": True, "recovered": True}
+                return
+            state = {"armed": False}
+            SIDE_TRIGGER_STATE[key] = state
+
+        if state.get("armed"):
+            return
+
+        # Clear old result fields only after the user clears and re-enters the command.
+        sheet.range(f"{id_col}{row_number}").value = None
+        sheet.range(f"{status_col}{row_number}").value = "QUEUED"
+        sheet.range(f"{price_col}{row_number}").value = None
+        SIDE_TRIGGER_STATE[key] = {"armed": True, "queued": True}
+
+    try:
+        SIDE_ORDER_EXECUTOR.submit(
+            _execute_terminal_side_order,
+            int(row_number), str(symbol), side, qty, product_type,
+            market_type, limit_price, ltp
+        )
+    except Exception as exc:
+        sheet.range(f"{status_col}{row_number}").value = "QUEUE ERROR: " + str(exc)
+        print(f"Could not queue {side} order for {symbol}: {exc}")
 
 
 def get_live_trade_sheet(workbook):
@@ -1119,30 +1170,32 @@ def start_Trade_Terminal():
                             exchange = i[:3]
                             tradingsymbol = i[4:]
                             TokenKey = Symbol_Token[i]
+                            with LIVE_DATA_LOCK:
+                                quote = dict(live_data.get(TokenKey, {}))
 
                             lst = [
-                                live_data[TokenKey].get("o", "-"),
-                                live_data[TokenKey].get("h", "-"),
-                                live_data[TokenKey].get("l", "-"),
-                                live_data[TokenKey].get("c", "-"),
-                                live_data[TokenKey].get("ap", "-"),
-                                live_data[TokenKey].get("bp1", "-"),
-                                live_data[TokenKey].get("sp1", "-"),
-                                live_data[TokenKey].get("v", "-"),
-                                live_data[TokenKey].get("oi", "-"),
-                                live_data[TokenKey].get("lp", "-"),
-                                live_data[TokenKey].get("pc", "-"),
+                                quote.get("o", "-"),
+                                quote.get("h", "-"),
+                                quote.get("l", "-"),
+                                quote.get("c", "-"),
+                                quote.get("ap", "-"),
+                                quote.get("bp1", "-"),
+                                quote.get("sp1", "-"),
+                                quote.get("v", "-"),
+                                quote.get("oi", "-"),
+                                quote.get("lp", "-"),
+                                quote.get("pc", "-"),
                             ]
                             indicator_row = indicator_engine.update(
                                 api, exchange, tradingsymbol,
-                                convert_to_float(live_data[TokenKey].get("lp", 0))
+                                convert_to_float(quote.get("lp", 0))
                             )
 
                             try:
                                 trade_info = trading_info[idx]
                                 excel_row = idx + 4
                                 ui_row = terminal_inputs[idx]
-                                current_ltp = convert_to_float(live_data[TokenKey].get("lp", 0))
+                                current_ltp = convert_to_float(quote.get("lp", 0))
                                 # Both sides are evaluated independently; neither command cell is cleared.
                                 dispatch_terminal_side_order(
                                     tt, excel_row, i, "BUY", ui_row[0], ui_row[1],
@@ -1161,7 +1214,7 @@ def start_Trade_Terminal():
                                 if trade_info[0] is not None and (has_new_trigger or has_live_trade_state):
                                     if isinstance(trade_info[0], (int, float)):
                                         
-                                        LTP = float(live_data[TokenKey].get("lp", 0))
+                                        LTP = float(quote.get("lp", 0))
                                         
                                         if Trade_Mode == 'REAL':
                                             #Real trade mode handling will handle here
