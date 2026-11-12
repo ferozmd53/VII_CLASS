@@ -722,6 +722,72 @@ def subscribe_new_token(exchange, Token):
     symbol.append(f"{exchange}|{Token}")
     api.subscribe(symbol)
 
+
+# Keep independent desired sets for Standard and Pro; the broker socket gets
+# only the union, so one chain cannot unsubscribe contracts still used by the other.
+OPTION_CHAIN_DESIRED_TOKENS = {"standard": set(), "pro": set()}
+OPTION_CHAIN_ACTIVE_TOKENS = set()
+OPTION_CHAIN_SUBSCRIPTION_LOCK = Lock()
+
+
+def update_option_chain_subscriptions(chain_name, exchange, symbol, expiry,
+                                      strike_list, spot_price, no_of_strikes):
+    """Subscribe only ATM +/- NoOfStrike CE/PE contracts for the chosen expiry."""
+    global OPTION_CHAIN_ACTIVE_TOKENS
+    try:
+        count = max(0, int(no_of_strikes))
+    except Exception:
+        count = 5
+
+    ordered = sorted(
+        strike_list,
+        key=lambda item: convert_to_float(item.get("strike"))
+    )
+    if not ordered:
+        return
+
+    atm_index = min(
+        range(len(ordered)),
+        key=lambda i: abs(convert_to_float(ordered[i].get("strike")) - float(spot_price))
+    )
+    atm_strike = convert_to_float(ordered[atm_index].get("strike"))
+    selected = ordered[max(0, atm_index-count):min(len(ordered), atm_index+count+1)]
+
+    wanted = set()
+    for item in selected:
+        for key in ("CE_Token", "PE_Token"):
+            token = str(item.get(key, "NA")).strip()
+            if token and token.upper() != "NA":
+                wanted.add(f"{exchange}|{token}")
+
+    with OPTION_CHAIN_SUBSCRIPTION_LOCK:
+        OPTION_CHAIN_DESIRED_TOKENS[chain_name] = wanted
+        union_wanted = set().union(*OPTION_CHAIN_DESIRED_TOKENS.values())
+        to_unsubscribe = sorted(OPTION_CHAIN_ACTIVE_TOKENS - union_wanted)
+        to_subscribe = sorted(union_wanted - OPTION_CHAIN_ACTIVE_TOKENS)
+
+        if to_unsubscribe:
+            try:
+                api.unsubscribe(to_unsubscribe)
+                print(f"Option chain {chain_name}: unsubscribed {len(to_unsubscribe)} old contracts")
+            except Exception as exc:
+                print(f"Option chain unsubscribe warning ({chain_name}): {exc}")
+
+        if to_subscribe:
+            try:
+                api.subscribe(to_subscribe)
+            except Exception as exc:
+                print(f"Option chain subscribe error ({chain_name}): {exc}")
+                OPTION_CHAIN_ACTIVE_TOKENS -= set(to_unsubscribe)
+                return
+
+        OPTION_CHAIN_ACTIVE_TOKENS = union_wanted
+        print(
+            f"Option chain {chain_name}: {len(wanted)} selected contracts "
+            f"for {symbol} {expiry}; ATM {atm_strike}; +/-{count} strikes"
+        )
+
+
 LimitOrderBook = {}
 
 # Side-specific order display is independent of the hidden trade-state engine.
@@ -1961,32 +2027,6 @@ def start_optionchain():
                             ][0]
                             #print(f"\n\n******\n\n{List_of_Expiry_Strike_token}")
 
-                            for expiry_strike in List_of_Expiry_Strike_token:
-                                
-                               
-                                if input_symbol not in subs_lst:
-
-                                    List_of_particular_expiry_strike = [
-                                        itr["Strike_list"]
-                                        for itr in List_of_Expiry_Strike_token
-                                        if itr["Expiry"] == expiry_strike["Expiry"]
-                                    ][0]
-
-                                    for strike_dict in List_of_particular_expiry_strike:
-                                        print(f"Going to subscribe {input_symbol} strike {strike_dict.get('strike')}")
-                                        PE_Token = strike_dict.get("PE_Token")
-                                        # print(PE_Token)
-                                        CE_Token = strike_dict.get("CE_Token")
-                                        # print(CE_Token)
-                                        if PE_Token != "NA":
-                                            subscribe_new_token(Exchange, PE_Token)
-                                        if CE_Token != "NA":
-                                            subscribe_new_token(Exchange, CE_Token)
-
-                            if input_symbol not in subs_lst:
-                                subs_lst.append(input_symbol)
-                                print(f"{input_symbol} subscription completed")
-
                             pd_oc = pd.DataFrame(columns=[ "CE_token", "CE_oi",  "CE_poi", "CE_toi", "CE_lp", "CE_pc", "CE_bq1","CE_bp1", "CE_sq1", "CE_sp1",  "strike", "PE_bq1", "PE_bp1", "PE_sq1", "PE_sp1", "PE_pc",  "PE_lp",  "PE_toi", "PE_poi", "PE_oi", "PE_token","CE_coi","PE_coi","CE_v","PE_v"] )
 
                             # prepare option chain
@@ -2023,6 +2063,16 @@ def start_optionchain():
                                     spot_ltp = convert_to_float(api.get_quotes(Exchange, str(Spot_Token)).get("lp"))
                                 #print(f"Spot_Token {Spot_Token} spot_ltp {spot_ltp}")
                                 future_ltp = convert_to_float(api.get_quotes(Exchange, str(Fut_Token)).get("lp"))
+                                
+                                try:
+                                    NoOfStrike = max(0, int(oci.range("E6").value))
+                                except Exception:
+                                    NoOfStrike = 5
+
+                                update_option_chain_subscriptions(
+                                    "standard", Exchange, input_symbol, expiry_input,
+                                    List_of_particular_expiry_strike, spot_ltp, NoOfStrike
+                                )
                                 
                                 #print(f"{input_symbol} spot ltp = {spot_ltp} future ltp = {future_ltp}")
 
@@ -2192,9 +2242,9 @@ def start_optionchain():
                                 df_oc_pro = pd_oc
                                 
                                 try:
-                                    NoOfStrike = int(oci.range("E6").value)
-                                except Exception as e:
-                                    NoOfStrike = 100
+                                    NoOfStrike = max(0, int(oci.range("E6").value))
+                except Exception:
+                    NoOfStrike = 5
                                 
                                 df_oc_pro['strike_diff'] = abs(df_oc_pro['strike'] - spot_ltp)
             
@@ -2679,32 +2729,6 @@ def start_optionchain_Pro():
                             ][0]
                             #print(f"\n\n******\n\n{List_of_Expiry_Strike_token}")
 
-                            for expiry_strike in List_of_Expiry_Strike_token:
-                                
-                               
-                                if input_symbol not in subs_lst:
-
-                                    List_of_particular_expiry_strike = [
-                                        itr["Strike_list"]
-                                        for itr in List_of_Expiry_Strike_token
-                                        if itr["Expiry"] == expiry_strike["Expiry"]
-                                    ][0]
-
-                                    for strike_dict in List_of_particular_expiry_strike:
-                                        print(f"Going to subscribe {input_symbol} strike {strike_dict.get('strike')}")
-                                        PE_Token = strike_dict.get("PE_Token")
-                                        # print(PE_Token)
-                                        CE_Token = strike_dict.get("CE_Token")
-                                        # print(CE_Token)
-                                        if PE_Token != "NA":
-                                            subscribe_new_token(Exchange, PE_Token)
-                                        if CE_Token != "NA":
-                                            subscribe_new_token(Exchange, CE_Token)
-
-                            if input_symbol not in subs_lst:
-                                subs_lst.append(input_symbol)
-                                print(f"{input_symbol} subscription completed")
-
                             pd_oc = pd.DataFrame(columns=[ "CE_token", "CE_oi",  "CE_poi", "CE_toi", "CE_lp", "CE_pc", "CE_bq1","CE_bp1", "CE_sq1", "CE_sp1",  "strike", "PE_bq1", "PE_bp1", "PE_sq1", "PE_sp1", "PE_pc",  "PE_lp",  "PE_toi", "PE_poi", "PE_oi", "PE_token","CE_coi","PE_coi","CE_v","PE_v"] )
 
                             # prepare option chain
@@ -2741,6 +2765,16 @@ def start_optionchain_Pro():
                                     spot_ltp = float(api.get_quotes(Exchange, str(Spot_Token)).get("lp"))
                                 #print(f"Spot_Token {Spot_Token} spot_ltp {spot_ltp}")
                                 future_ltp = float(api.get_quotes(Exchange, str(Fut_Token)).get("lp"))
+                                
+                                try:
+                                    NoOfStrike = max(0, int(oci_pro.range("E6").value))
+                                except Exception:
+                                    NoOfStrike = 5
+
+                                update_option_chain_subscriptions(
+                                    "pro", Exchange, input_symbol, expiry_input,
+                                    List_of_particular_expiry_strike, spot_ltp, NoOfStrike
+                                )
                                 
                                 #print(f"{input_symbol} spot ltp = {spot_ltp} future ltp = {future_ltp}")
 
@@ -2910,9 +2944,9 @@ def start_optionchain_Pro():
                                 df_oc_pro = pd_oc
                                 
                                 try:
-                                    NoOfStrike = int(oci_pro.range("E6").value)
-                                except Exception as e:
-                                    NoOfStrike = 100
+                                    NoOfStrike = max(0, int(oci_pro.range("E6").value))
+                except Exception:
+                    NoOfStrike = 5
                                 
                                 df_oc_pro['strike_diff'] = abs(df_oc_pro['strike'] - spot_ltp)
             
