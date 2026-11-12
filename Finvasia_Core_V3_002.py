@@ -497,8 +497,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
     tradingsymbol = symbol[4:]
     exchange = symbol[:3]
     
-    if order_type == 'MARKET':
-        price = 0
+    if order_type == 'MARKET':        price = 0
         trigger_price = None
         price_type = "MKT"
     elif order_type == 'LIMIT':
@@ -541,29 +540,56 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
     Message = "Order Details : buy_or_sell = " + str(buy_or_sell[0]) + ", product_type = " + str(product)+ ", exchange = " + str(exchange)+ ", tradingsymbol = " + str(tradingsymbol)+ ", quantity = " + str(quantity)+ ", price_type = " + str(price_type)+ ", price = " + str(price)+ ", trigger_price = " + str(trigger_price)
     logger.info(Message)
     
-    order_id = api.place_order(
-        buy_or_sell=buy_or_sell[0],
-        product_type=product,
-        exchange=exchange,
-        tradingsymbol=tradingsymbol,
-        quantity=quantity,
-        discloseqty=0,
-        price_type=price_type,
-        price=price,
-        trigger_price=trigger_price,
-        retention="DAY",
-        remarks="Python_Trader",
-    ).get("norenordno")
+    try:
+        order_response = api.place_order(
+            buy_or_sell=buy_or_sell[0],
+            product_type=product,
+            exchange=exchange,
+            tradingsymbol=tradingsymbol,
+            quantity=quantity,
+            discloseqty=0,
+            price_type=price_type,
+            price=price,
+            trigger_price=trigger_price,
+            retention="DAY",
+            remarks="Python_Trader",
+        )
+    except Exception as exc:
+        Message = f"ORDER SUBMISSION ERROR for {tradingsymbol}: {exc}"
+        print(Message)
+        logger.error(Message)
+        return None
 
-    Message = "Order placed for " + str (tradingsymbol) + " " + str(quantity) + " quantity " + str(buy_or_sell) + ", ur order id :" + str(order_id)
+    if not isinstance(order_response, dict):
+        Message = (
+            f"ORDER NOT CONFIRMED for {tradingsymbol}: Shoonya returned "
+            f"{order_response!r}; check broker OrderBook before retrying."
+        )
+        print(Message)
+        logger.error(Message)
+        return None
+
+    order_id = order_response.get("norenordno") or order_response.get("order_id")
+    broker_stat = str(order_response.get("stat", "")).strip().lower()
+    if not order_id or broker_stat in ("not_ok", "not ok", "error", "failed"):
+        Message = (
+            f"ORDER REJECTED/UNCONFIRMED for {tradingsymbol}: "
+            f"{order_response.get('emsg') or order_response}"
+        )
+        print(Message)
+        logger.error(Message)
+        return None
+
+    Message = (
+        f"Broker accepted order for {tradingsymbol} {quantity} quantity "
+        f"{buy_or_sell}; order id: {order_id}"
+    )
     print(Message)
+    logger.info(f"Raw Shoonya order response: {order_response}")
     logger.info(Message)
     Telegram_Message.append(Message)
-    Voice_Message.append(Message)
-    
     print(f"Order id = {order_id}")
-
-    return order_id
+    return str(order_id)
 
 def get_order_book():
     try:
@@ -657,9 +683,34 @@ def start_Trade_Terminal():
     
     AlertMessage = Trade_Mode + " trade mode enabled"
     Telegram_Message.append(AlertMessage)
-    Voice_Message.append(AlertMessage)    
+    # Trade-mode announcement is not spoken; system alerts remain enabled.
     
     Symbol_Token = {}
+    subscription_pending = set()
+    subscription_lock = Lock()
+    from concurrent.futures import ThreadPoolExecutor
+    subscription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="SymbolSubscribe")
+
+    def subscribe_symbol_in_background(symbol):
+        try:
+            exchange = str(symbol)[:3]
+            tradingsymbol = str(symbol)[4:]
+            token = GetToken_UsingSymbol(exchange, tradingsymbol)
+            if token is None or str(token).strip() == "":
+                raise ValueError(f"No instrument token found for {symbol}")
+            token_key = exchange + "|" + str(token)
+            subscribe_new_token(exchange, token)
+            Symbol_Token[symbol] = token_key
+            with subscription_lock:
+                if symbol not in subs_lst:
+                    subs_lst.append(symbol)
+            print(f"Symbol = {symbol}, Token={token} subscribed")
+        except Exception as exc:
+            print(f"Subscribe error {symbol}: {exc}")
+        finally:
+            with subscription_lock:
+                subscription_pending.discard(symbol)
+
     global LimitOrderBook
     #run a parallel thread to update the status
     while True:
@@ -676,18 +727,11 @@ def start_Trade_Terminal():
                 indicator_row = [None, None, None, None, None, None, "", ""]
                 if i:
                     if i not in subs_lst:
-                        subs_lst.append(i)
-                        try:
-                            exchange = i[:3]
-                            tradingsymbol = i[4:]
-                            Token = GetToken_UsingSymbol(exchange, tradingsymbol)
-                            Symbol_Token[i] = exchange + "|" + str(Token)
-                            subscribe_new_token(exchange, Token)
-                            print(f"Symbol = {i}, Token={Token} subscribed")
-
-                        except Exception as e:
-                            print(f"Subscribe error {i} : {e}")
-                    if i in subs_lst:
+                        with subscription_lock:
+                            if i not in subscription_pending:
+                                subscription_pending.add(i)
+                                subscription_executor.submit(subscribe_symbol_in_background, i)
+                    if i in subs_lst and i in Symbol_Token:
                         try:
                             exchange = i[:3]
                             tradingsymbol = i[4:]
@@ -824,7 +868,7 @@ def start_Trade_Terminal():
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Bought at " + str(Executed_price)
                                                             
                                                             Telegram_Message.append(Message)
-                                                            Voice_Message.append(Message)
+                                                            # Order and execution messages are intentionally not spoken.
                         
                         
                                                         tt.range(f"S{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
@@ -922,7 +966,7 @@ def start_Trade_Terminal():
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Sold at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
                                                             
                                                             Telegram_Message.append(Message)
-                                                            Voice_Message.append(Message)
+                                                            # Order and execution messages are intentionally not spoken.
                                                             
                                                         tt.range(f"W{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
@@ -997,8 +1041,7 @@ def start_Trade_Terminal():
                                                             
                                                                     
                                                         elif trade_info[2] == 'Limit_Below' and trade_info[3] is not None:
-                                                           
-                                                            #handling real Limit_Above based trade
+                                                                                                                       #handling real Limit_Above based trade
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
                                                             logger.info(Message)
                                                             
@@ -1030,7 +1073,7 @@ def start_Trade_Terminal():
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Sold at " + str(Executed_price) 
                                                             
                                                             Telegram_Message.append(Message)
-                                                            Voice_Message.append(Message)
+                                                            # Order and execution messages are intentionally not spoken.
                                                             
                                                         tt.range(f"S{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
@@ -1133,7 +1176,7 @@ def start_Trade_Terminal():
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " buyback at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
                                                             
                                                             Telegram_Message.append(Message)
-                                                            Voice_Message.append(Message)
+                                                            # Order and execution messages are intentionally not spoken.
                                                             
                                                         tt.range(f"W{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                             except Exception as e:
@@ -1497,8 +1540,7 @@ def start_optionchain():
                                 )
 
                                 OptionChain_template.append(Final_dic)
-                                # print("\n\n")
-                                #print(OptionChain_template)
+                                # print("\n\n")                                #print(OptionChain_template)
                             else:
                                 Message = (
                                     "symbol already available in option chain template"
@@ -1917,6 +1959,7 @@ def start_optionchain():
                                 ATM_pos = df_oc_pro[df_oc_pro.strike == AtmStrike].index.values[0]
                                 if NoOfStrike * 2 < len(df_oc_pro):
                                     df_oc_pro = df_oc_pro.iloc[ATM_pos - int(NoOfStrike) : ATM_pos + int(NoOfStrike) + 1]
+                                    df_oc_pro = df_oc_pro.reset_index(drop=True)
                                     ATM_Row = int(NoOfStrike) + 3
                                     Option_Chain_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
                         
@@ -1997,8 +2040,7 @@ def GetToken(Exchange,Symbol, Type = 'FUT' ,Expiry=None,Strike = None):
             if Symbol in IndexList:    
                 Token = Token_list[Symbol]
                 isTokenFound = True
-            else:
-                df_ins_temp = df_ins_BSE[df_ins_BSE.Symbol == Symbol]
+            else:                df_ins_temp = df_ins_BSE[df_ins_BSE.Symbol == Symbol]
                 if len(df_ins_temp) > 0:
                     Token = df_ins_temp.iloc[0]['Token']
                     isTokenFound = True
@@ -2497,8 +2539,7 @@ def start_optionchain_Pro():
                                 Max_Change_in_OI_addition_PE = df_oc_pro["PE_coi"].max()
                                 Max_OI_addition_at_Srike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['strike']
                                 Max_OI_addition_at_Srike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].max()].iloc[0]['strike']
-                                LTP_of_Max_OI_addition_Strike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['CE_lp']
-                                LTP_of_Max_OI_addition_Strike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].max()].iloc[0]['PE_lp']
+                                LTP_of_Max_OI_addition_Strike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['CE_lp']                                LTP_of_Max_OI_addition_Strike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].max()].iloc[0]['PE_lp']
                                 Max_Change_in_OI_unwinding_CE = -1 * int(df_oc_pro["CE_coi"].min())
                                 Max_Change_in_OI_unwinding_PE = -1 * int(df_oc_pro["PE_coi"].min())
                                 Max_OI_unwinding_at_Srike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].min()].iloc[0]['strike']
@@ -2634,6 +2675,7 @@ def start_optionchain_Pro():
                                 ATM_pos = df_oc_pro[df_oc_pro.strike == AtmStrike].index.values[0]
                                 if NoOfStrike * 2 < len(df_oc_pro):
                                     df_oc_pro = df_oc_pro.iloc[ATM_pos - int(NoOfStrike) : ATM_pos + int(NoOfStrike) + 1]
+                                    df_oc_pro = df_oc_pro.reset_index(drop=True)
                                     ATM_Row = int(NoOfStrike) + 3
                                     Option_Chain_Pro_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
                         
