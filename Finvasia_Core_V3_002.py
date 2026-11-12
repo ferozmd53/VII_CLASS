@@ -271,6 +271,7 @@ def Shoonya_login():
             print(f"Shoonya session validation failed: {login_status}")
             login_sheet.range("C2").value = "Shoonya session validation failed."
             login_sheet.range("C2").color = (255, 0, 0)
+            Text2Speech("Warning. Shoonya session validation failed. No live trading will start.")
             return 0
 
         userid = str(login_sheet.range("B3").value or "").strip()
@@ -411,11 +412,16 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
     if not BROKER_LOGIN_OK:
         print("Live order blocked: Shoonya login is not active.")
         return None
-    if SYSTEM_INTERNET_OK is False:
+    if SYSTEM_INTERNET_OK is False or not internet_is_available():
         print("Live order blocked: internet is unavailable.")
         return None
     if SYSTEM_EXCEL_OK is False:
         print("Live order blocked: Excel workbook is unavailable.")
+        return None
+    try:
+        _ = xw.Book(TerminalSheetName).sheets["LOGIN"].range("B3").value
+    except Exception:
+        print("Live order blocked: Excel workbook is not available.")
         return None
     global Product_type
     global logger
@@ -2601,7 +2607,10 @@ def start_optionchain_Pro():
         sleep(int(IterationSleep))
 
 def CloseTrade():
-    global api
+    global api, BROKER_LOGIN_OK
+    if not BROKER_LOGIN_OK or SYSTEM_INTERNET_OK is False or SYSTEM_EXCEL_OK is False:
+        Text2Speech("Square off blocked. Broker login, internet or Excel is unavailable.")
+        return
     print("I am inside CloseTrade")
     try:
         df_open_position_net,OverAllPnL  = get_position()
@@ -2752,6 +2761,8 @@ def start_Open_Position():
                                     price = 0.0
                                     #print(f"squareoff {tradingsymbol}  {exchange} {product} {quantity}{transaction_type}")
                                     try:
+                                        if not BROKER_LOGIN_OK or SYSTEM_INTERNET_OK is False or SYSTEM_EXCEL_OK is False:
+                                            raise RuntimeError("Live square-off blocked: broker login, internet or Excel unavailable")
                                         api.place_order(buy_or_sell=buy_or_sell,product_type=product_type,exchange=exchange,tradingsymbol=tradingsymbol,quantity=quantity,discloseqty=0,price_type=price_type,price=price,trigger_price=None,retention="DAY",remarks=tag)
                                     except Exception as e:
                                         print(f"squareoff can't be done for {df_openPosition['Symbol'][i]} with reason : {e}")
@@ -2908,9 +2919,15 @@ if Shoonya_login() == 1:
         socket_close_callback=event_handler_socket_closed,
     )
 
-    while feed_opened == False:
+    for websocket_attempt in range(60):
+        if feed_opened:
+            break
         print("Trying to connect WebSocket...")
-        pass
+        sleep(1)
+
+    if not feed_opened:
+        Text2Speech("Warning. Shoonya live data connection failed. Live trading will not start.")
+        raise SystemExit("Shoonya WebSocket did not connect within 60 seconds.")
 
     print("Connected to WebSocket...")
 
