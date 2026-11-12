@@ -8,7 +8,8 @@ Install Python 3.11–3.13 (64-bit) and Microsoft Excel.
 
 Open Command Prompt and run:
 ##
-pip install --upgrade pip
+pip uninstall git+https://github.com/ferozmd53/VII_CLASS.git -y
+
 pip install git+https://github.com/ferozmd53/VII_CLASS.git
 ##
 
