@@ -9,15 +9,15 @@ Install Python 3.11–3.13 (64-bit) and Microsoft Excel.
 Open Command Prompt and run these commands one by one:
 
 ```bat
-python -m pip uninstall VII_CLASS -y
-python -m pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.git
+pip uninstall VII_CLASS -y
+pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.git
 ```
 
 If you use Python 3.13 installed at `C:\Python313`, use:
 
 ```bat
-C:\Python313\python.exe -m pip uninstall VII_CLASS -y
-C:\Python313\python.exe -m pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.git
+pip uninstall VII_CLASS -y
+pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.git
 ```
 
 **Important:** Do not use `pip uninstall git+https://...`. Uninstall requires the installed package name, which is `VII_CLASS`. The install command pulls the latest repository version and its declared dependencies, including SciPy.
