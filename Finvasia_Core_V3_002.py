@@ -177,6 +177,7 @@ def system_health_monitor():
     global SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK
     previous_internet = None
     previous_excel = None
+    broker_check_counter = 0
     while True:
         internet_ok = internet_is_available()
         SYSTEM_INTERNET_OK = internet_ok
@@ -201,6 +202,19 @@ def system_health_monitor():
             elif previous_excel is False:
                 Text2Speech("Excel workbook connection restored.")
             previous_excel = excel_ok
+
+        broker_check_counter += 1
+        if BROKER_LOGIN_OK and internet_ok and broker_check_counter >= 4:
+            broker_check_counter = 0
+            try:
+                broker_status = api.get_limits()
+                broker_ok = isinstance(broker_status, dict) and str(broker_status.get("stat", "")).lower() == "ok"
+            except Exception:
+                broker_ok = False
+            if not broker_ok:
+                BROKER_LOGIN_OK = False
+                Text2Speech("Warning. Shoonya broker session is no longer valid. Live orders are blocked.")
+
         sleep(8)
 
 
