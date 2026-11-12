@@ -686,6 +686,7 @@ def start_Trade_Terminal():
     # Trade-mode announcement is not spoken; system alerts remain enabled.
     
     Symbol_Token = {}
+    terminal_subscribed = set()
     subscription_pending = set()
     subscription_lock = Lock()
     from concurrent.futures import ThreadPoolExecutor
@@ -702,8 +703,7 @@ def start_Trade_Terminal():
             subscribe_new_token(exchange, token)
             Symbol_Token[symbol] = token_key
             with subscription_lock:
-                if symbol not in subs_lst:
-                    subs_lst.append(symbol)
+                terminal_subscribed.add(symbol)
             print(f"Symbol = {symbol}, Token={token} subscribed")
         except Exception as exc:
             print(f"Subscribe error {symbol}: {exc}")
@@ -726,12 +726,13 @@ def start_Trade_Terminal():
                 lst = [None, None, None, None,None, None, None, None, None,None,None]
                 indicator_row = [None, None, None, None, None, None, "", ""]
                 if i:
-                    if i not in subs_lst:
-                        with subscription_lock:
-                            if i not in subscription_pending:
-                                subscription_pending.add(i)
-                                subscription_executor.submit(subscribe_symbol_in_background, i)
-                    if i in subs_lst and i in Symbol_Token:
+                    with subscription_lock:
+                        needs_subscription = i not in terminal_subscribed and i not in subscription_pending
+                        if needs_subscription:
+                            subscription_pending.add(i)
+                    if needs_subscription:
+                        subscription_executor.submit(subscribe_symbol_in_background, i)
+                    if i in terminal_subscribed and i in Symbol_Token:
                         try:
                             exchange = i[:3]
                             tradingsymbol = i[4:]
