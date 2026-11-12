@@ -24,7 +24,7 @@ C:\Python313\python.exe -m pip install --upgrade --no-cache-dir git+https://gith
 
 ## Login setup
 
-1. Open `Finvasia_Trade_Terminal_v3.xlsm` in Excel and enable macros.
+1. Open `VII_CLASS.xlsm` in Excel and enable macros.
 2. Run `python run.py` once; this creates the `LOGIN` sheet and stops if the credentials are blank.
 3. Open the workbook again and fill these cells in `LOGIN`, then run `python run.py` again:
 
@@ -62,7 +62,7 @@ python run.py
 You can also pass a workbook path:
 
 ```bat
-python run.py "C:\\full\\path\\Finvasia_Trade_Terminal_v3.xlsm"
+python run.py "C:\\full\\path\\VII_CLASS.xlsm"
 ```
 
 ## Source acknowledgements
