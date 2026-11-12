@@ -802,6 +802,23 @@ def update_side_order_display(order_id, status, executed_price=None, remarks=Non
             sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {remarks}"
     except Exception as exc:
         print(f"Could not refresh side order {order_id}: {exc}")
+def register_pending_order(order_id):
+    """Add a local pending placeholder without overwriting an earlier broker push update."""
+    key = str(order_id)
+    with SIDE_ORDER_TRACKER_LOCK:
+        early = SIDE_ORDER_UPDATES.get(key)
+    if early:
+        LimitOrderBook[key] = {
+            "status": early.get("status", "PENDING"),
+            "Remarks": early.get("remarks"),
+            "Executed_price": early.get("executed_price"),
+        }
+    else:
+        LimitOrderBook[key] = {
+            "status": "PENDING", "Remarks": None, "Executed_price": None
+        }
+
+
 def _is_terminal_trigger(value, side):
     """Accept an explicit BUY/SELL command or a truthy Excel trigger value."""
     if value is None:
@@ -993,8 +1010,14 @@ def start_Trade_Terminal():
                 ui = terminal_inputs[row_offset]
                 management = management_inputs[row_offset]
                 internal_row[0] = ui[0]                         # Qty (M)
-                internal_row[1] = ui[2]                         # BUY trigger (O)
-                internal_row[2] = ui[8]                         # SELL trigger (U)
+                if ui[2] not in (None, ""):
+                    internal_row[1] = ui[2]                     # BUY trigger (O)
+                elif internal_row[16] not in ("Entry_Pending", "Active", "Exit_Pending"):
+                    internal_row[1] = None
+                if ui[8] not in (None, ""):
+                    internal_row[2] = ui[8]                     # SELL trigger (U)
+                elif internal_row[16] not in ("Entry_Pending", "Active", "Exit_Pending"):
+                    internal_row[2] = None
                 internal_row[18] = ui[1]                        # Order Type (N)
                 internal_row[11] = management[0]                # Target (AA)
                 internal_row[12] = management[1]                # SL (AB)
@@ -1091,7 +1114,7 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1110,7 +1133,7 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1132,7 +1155,7 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1155,7 +1178,7 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1180,6 +1203,8 @@ def start_Trade_Terminal():
                                                             # Order and execution messages are intentionally not spoken.
                         
                         
+                                                        if status in ("REJECTED", "CANCELLED", "CANCELED"):
+                                                            tt.range(f"BQ{excel_row}").value = status
                                                         tt.range(f"BH{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
                                                     elif trade_info[16] == 'Active':
@@ -1216,7 +1241,7 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
@@ -1230,7 +1255,7 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
@@ -1242,7 +1267,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             
-                                                            LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                            register_pending_order(order_id)
                                                                 
                                                             tt.range(f"BK{excel_row}").value = order_id
                                                             tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
@@ -1254,7 +1279,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             
-                                                            LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                            register_pending_order(order_id)
                                                             
                                                             tt.range(f"BK{excel_row}").value = order_id
                                                             tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
@@ -1277,6 +1302,8 @@ def start_Trade_Terminal():
                                                             Telegram_Message.append(Message)
                                                             # Order and execution messages are intentionally not spoken.
                                                             
+                                                        if status in ("REJECTED", "CANCELLED", "CANCELED"):
+                                                            tt.range(f"BQ{excel_row}").value = status
                                                         tt.range(f"BL{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
                                             elif _is_terminal_trigger(trade_info[2], "SELL") and LTP != 0:
@@ -1297,8 +1324,8 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                tt.range(f"U{excel_row}").value = None
+                                                                register_pending_order(order_id)
                                                             
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1319,8 +1346,8 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                tt.range(f"U{excel_row}").value = None
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1340,8 +1367,8 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                tt.range(f"U{excel_row}").value = None
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1362,8 +1389,8 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                tt.range(f"U{excel_row}").value = None
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
@@ -1424,7 +1451,7 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                     
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = "Exit_Pending"
@@ -1439,7 +1466,7 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'    
@@ -1451,7 +1478,7 @@ def start_Trade_Terminal():
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             
-                                                            LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                            register_pending_order(order_id)
                                                             
                                                             tt.range(f"BK{excel_row}").value = order_id
                                                             tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
@@ -1468,7 +1495,7 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else: 
                                                             
-                                                                LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
+                                                                register_pending_order(order_id)
                                                                 
                                                                 
                                                                 tt.range(f"BK{excel_row}").value = order_id
