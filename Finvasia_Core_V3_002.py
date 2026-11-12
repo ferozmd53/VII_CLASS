@@ -44,6 +44,12 @@ import logging
 from threading import Thread
 import numpy as np
 
+# NumPy 2.0 removed the legacy np.PINF alias.
+# The upstream GetIVGreeks option-chain module still references it.
+# Restore the alias before importing/loading that module for compatibility.
+if not hasattr(np, "PINF"):
+    np.PINF = np.inf
+
 try:
     import pandas as pd
 except (ModuleNotFoundError, ImportError):
