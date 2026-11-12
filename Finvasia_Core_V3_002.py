@@ -26,6 +26,11 @@ Toots Feature :
 
 Market_Safety = 1
 
+voice_lock = Lock()
+SYSTEM_INTERNET_OK = None
+SYSTEM_EXCEL_OK = None
+BROKER_LOGIN_OK = False
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -41,7 +46,8 @@ import platform
 from datetime import datetime as dt, timedelta, time, date
 from time import sleep
 import logging
-from threading import Thread
+import socket
+from threading import Thread, Lock
 import numpy as np
 
 # NumPy 2.0 removed the legacy positive/negative infinity aliases.
@@ -130,25 +136,72 @@ except Exception:
 
 
 def Text2Speech(Text):
-    #print(Text)
-    
+    """Speak a message using one serialized Windows TTS engine."""
     global engine
     try:
-        engine = pyttsx3.init()
-        voices = engine.getProperty('voices')
-        try:
-           engine.setProperty('voice', voices[1].id)
-        except Exception as e:
-            pass
-        engine.setProperty('rate', 160)
-        engine.say(Text)
-        engine.runAndWait()
-        del engine
+        with voice_lock:
+            engine = pyttsx3.init()
+            voices = engine.getProperty('voices')
+            try:
+                if len(voices) > 1:
+                    engine.setProperty('voice', voices[1].id)
+            except Exception:
+                pass
+            engine.setProperty('rate', 160)
+            engine.say(str(Text))
+            engine.runAndWait()
+            del engine
     except Exception as e:
-        #print(f"Issue in voice module : {e}")
-        pass
+        print(f"Voice alert failed: {e}")
     
 Text2Speech("Welcome to python trader trade terminal tool, have a nice day. Hope u r enjoying our work")
+
+
+
+
+
+def internet_is_available():
+    """Check internet reachability independently of the broker WebSocket."""
+    for host in ("1.1.1.1", "8.8.8.8"):
+        try:
+            connection = socket.create_connection((host, 53), timeout=2)
+            connection.close()
+            return True
+        except OSError:
+            continue
+    return False
+
+
+def system_health_monitor():
+    """Speak on internet or Excel workbook disconnect/recovery transitions."""
+    global SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK
+    previous_internet = None
+    previous_excel = None
+    while True:
+        internet_ok = internet_is_available()
+        SYSTEM_INTERNET_OK = internet_ok
+        if internet_ok != previous_internet:
+            if not internet_ok:
+                Text2Speech("Warning. Internet connection lost. Live orders are blocked.")
+            elif previous_internet is False:
+                Text2Speech("Internet connection restored.")
+            previous_internet = internet_ok
+
+        excel_ok = False
+        try:
+            workbook = xw.Book(TerminalSheetName)
+            _ = workbook.sheets["LOGIN"].range("B3").value
+            excel_ok = True
+        except Exception:
+            excel_ok = False
+        SYSTEM_EXCEL_OK = excel_ok
+        if excel_ok != previous_excel:
+            if not excel_ok:
+                Text2Speech("Warning. Excel workbook is closed or not responding. Live orders are blocked.")
+            elif previous_excel is False:
+                Text2Speech("Excel workbook connection restored.")
+            previous_excel = excel_ok
+        sleep(8)
 
 
 def get_login_settings_sheet(workbook):
@@ -179,7 +232,8 @@ def get_login_settings_sheet(workbook):
 
 
 def Shoonya_login():
-    global api, TelegramBotCredential, ReceiverTelegramID
+    global api, TelegramBotCredential, ReceiverTelegramID, BROKER_LOGIN_OK
+    BROKER_LOGIN_OK = False
     global logger, userid, client_name
     client_name = ""
     isConnected = 0
@@ -209,6 +263,7 @@ def Shoonya_login():
         if api is None:
             login_sheet.range("C2").value = "Shoonya OAuth login failed. Check LOGIN sheet."
             login_sheet.range("C2").color = (255, 0, 0)
+            Text2Speech("Warning. Shoonya login failed. Please check the LOGIN sheet and internet connection.")
             return 0
 
         login_status = api.get_limits()
@@ -222,13 +277,15 @@ def Shoonya_login():
         client_name = userid
         login_sheet.range("C2").value = "Login Successful, Welcome " + client_name + "\nOAuth session reused/saved in LOGIN and SESSION sheets."
         login_sheet.range("C2").color = (118, 224, 180)
-        Text2Speech("Shoonya login successful")
+        Text2Speech("Shoonya login successful. Live trading mode is enabled.")
         excel_name.save()
+        BROKER_LOGIN_OK = True
         isConnected = 1
         return isConnected
 
     except Exception as exc:
         print(f"Shoonya OAuth login error: {exc}")
+        Text2Speech("Warning. Shoonya login failed. No live trading will start.")
         try:
             login_sheet.range("C2").value = "Login failed: " + str(exc)
             login_sheet.range("C2").color = (255, 0, 0)
@@ -327,7 +384,10 @@ def open_callback():
     subs_lst = []
     
 def event_handler_socket_closed():
-    print(f"socket closed, so again trying to reconnect")
+    global feed_opened
+    feed_opened = False
+    print("WebSocket disconnected; waiting for reconnection.")
+    Text2Speech("Warning. Shoonya live data connection disconnected.")
     sleep(2)
     
 def order_status(orderid):
@@ -347,7 +407,16 @@ def order_status(orderid):
     return status, AverageExecutedPrice
 
 def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
-    global api
+    global api, BROKER_LOGIN_OK, SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK
+    if not BROKER_LOGIN_OK:
+        print("Live order blocked: Shoonya login is not active.")
+        return None
+    if SYSTEM_INTERNET_OK is False:
+        print("Live order blocked: internet is unavailable.")
+        return None
+    if SYSTEM_EXCEL_OK is False:
+        print("Live order blocked: Excel workbook is unavailable.")
+        return None
     global Product_type
     global logger
     tradingsymbol = symbol[4:]
@@ -2826,7 +2895,8 @@ def StartThread():
         Message = str(e) + " : Exception occur"
         print(Message)
 
-print(f"Python Trader Excel Based Terminal program initialised")
+print("Python Trader Excel Based Terminal program initialised")
+Thread(target=system_health_monitor, daemon=True).start()
 if Shoonya_login() == 1:
     LoadInstrument_token()
     
@@ -2847,4 +2917,6 @@ if Shoonya_login() == 1:
     StartThread()
     print("Enjoy the automation...")
 else:
-    print("\n\nAlgo is not able to login using your given credential. Please follow below steps in matrix wise.\n\n1. Check entered userid/password/apikey/otp is correct or not. Try to login your finvasia account using same credential.\n2. If issue still exist please regenerate your password and api key and update the sheet.\n3. If you are using algo first time, please wait for 24 hours to activate your api.\n4. If issue still exist please contact to finvasia support team.")
+    BROKER_LOGIN_OK = False
+    Text2Speech("Warning. Shoonya login failed. No live trading will start.")
+    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection.")
