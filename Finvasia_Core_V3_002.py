@@ -2624,7 +2624,8 @@ def start_optionchain_Pro():
                                 Max_Change_in_OI_addition_PE = df_oc_pro["PE_coi"].max()
                                 Max_OI_addition_at_Srike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['strike']
                                 Max_OI_addition_at_Srike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].max()].iloc[0]['strike']
-                                LTP_of_Max_OI_addition_Strike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['CE_lp']                                LTP_of_Max_OI_addition_Strike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].max()].iloc[0]['PE_lp']
+                                LTP_of_Max_OI_addition_Strike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['CE_lp']
+                                LTP_of_Max_OI_addition_Strike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].max()].iloc[0]['PE_lp']
                                 Max_Change_in_OI_unwinding_CE = -1 * int(df_oc_pro["CE_coi"].min())
                                 Max_Change_in_OI_unwinding_PE = -1 * int(df_oc_pro["PE_coi"].min())
                                 Max_OI_unwinding_at_Srike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].min()].iloc[0]['strike']
