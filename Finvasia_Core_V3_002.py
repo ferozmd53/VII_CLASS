@@ -2243,8 +2243,8 @@ def start_optionchain():
                                 
                                 try:
                                     NoOfStrike = max(0, int(oci.range("E6").value))
-                except Exception:
-                    NoOfStrike = 5
+                                except Exception:
+                                    NoOfStrike = 5
                                 
                                 df_oc_pro['strike_diff'] = abs(df_oc_pro['strike'] - spot_ltp)
             
@@ -2945,8 +2945,8 @@ def start_optionchain_Pro():
                                 
                                 try:
                                     NoOfStrike = max(0, int(oci_pro.range("E6").value))
-                except Exception:
-                    NoOfStrike = 5
+                                except Exception:
+                                    NoOfStrike = 5
                                 
                                 df_oc_pro['strike_diff'] = abs(df_oc_pro['strike'] - spot_ltp)
             
