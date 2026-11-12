@@ -16,9 +16,8 @@ python -m pip install -r requirements.txt
 ## Login setup
 
 1. Open `Finvasia_Trade_Terminal_v3.xlsm` in Excel and enable macros.
-2. Run `python run.py`.
-3. The program creates a `LOGIN` sheet if it is not already present.
-4. Fill these cells in `LOGIN`:
+2. Run `python run.py` once; this creates the `LOGIN` sheet and stops if the credentials are blank.
+3. Open the workbook again and fill these cells in `LOGIN`, then run `python run.py` again:
 
 | Cell | Value |
 |---|---|
@@ -34,7 +33,7 @@ The access token is stored in `LOGIN!B8:B14` and a hidden `SESSION` sheet. Keep 
 
 ## Indicators
 
-The Finvasia terminal remains the main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `Trade_Terminal` columns `AD:AK`, using the same daily historical-data and indicator formulas as the Shoonya indicator project.
+The Finvasia terminal remains the main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `Trade_Terminal` columns `AD:AK`, using the same daily historical-data and indicator formulas as the Shoonya indicator project. Daily indicator history is currently enabled for NSE symbols, matching the original indicator implementation; other exchanges continue to receive the Finvasia live terminal data.
 
 ## Start
 
