@@ -7,10 +7,10 @@ Educational and research software. Trading involves financial risk; verify every
 Install Python 3.11–3.13 (64-bit) and Microsoft Excel.
 
 Open Command Prompt and run:
-
-python -m pip install --upgrade pip
-python -m pip install git+https://github.com/ferozmd53/VII_CLASS.git
-```
+##
+pip install --upgrade pip
+pip install git+https://github.com/ferozmd53/VII_CLASS.git
+##
 
 ## Login setup
 
