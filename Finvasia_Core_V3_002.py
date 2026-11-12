@@ -665,7 +665,6 @@ def _is_terminal_trigger(value, side):
     return str(value).strip().upper() in (side, "TRUE", "1", "YES", "ON")
 
 
-)
 
 def get_live_trade_sheet(workbook):
     """Return LIVE_TRADE, migrating the previous Trade_Terminal tab name."""
@@ -3087,4 +3086,4 @@ if Shoonya_login() == 1:
 else:
     BROKER_LOGIN_OK = False
     Text2Speech("Warning. Shoonya login failed. No live trading will start.")
-    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection."
+    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection.")
