@@ -483,12 +483,14 @@ def event_handler_socket_closed():
     Text2Speech("Warning. Shoonya live data connection disconnected.")
     sleep(2)
     
-def order_status(orderid):
-    """Return the broker status and average price, including partial fills."""
+def order_status(orderid, order_book_snapshot=None):
+    """Return broker status from a shared snapshot, including partial fills."""
     average_executed_price = 0
     status = ""
     try:
-        order_book = get_order_book()
+        order_book = order_book_snapshot if order_book_snapshot is not None else get_order_book()
+        if order_book is None or order_book.empty:
+            return status, average_executed_price
         order_book = order_book[order_book["Order No"].astype(str) == str(orderid)]
         if not order_book.empty:
             order = order_book.iloc[0]
@@ -737,7 +739,7 @@ SIDE_TRIGGER_STATE_LOCK = Lock()
 # Manual BUY/SELL requests run outside the market-data/Excel refresh loop.
 # Multiple workers ensure one slow broker request cannot hold up other symbols.
 SIDE_ORDER_EXECUTOR = ThreadPoolExecutor(
-    max_workers=16, thread_name_prefix="ShoonyaSideOrder"
+    max_workers=64, thread_name_prefix="ShoonyaSideOrder"
 )
 
 
@@ -3402,12 +3404,13 @@ def start_Open_Position():
             pass
         
         try:
-            
-            for key, value in LimitOrderBook.items():
-                #print(f"check status of {key} , having current status {value['status']}")
-                if value['status'] not in ('COMPLETE', 'REJECTED', 'CANCELLED', 'CANCELED'):
-                    status, Executed_price = order_status (key)
-                    #print(f"filled_quantity = {filled_quantity},Executed_price={Executed_price}, status={status} ")
+            # Fetch the broker order book once per cycle, not once per order.
+            # This prevents dozens of pending symbols from flooding the API and
+            # competing with new order submissions.
+            order_book_snapshot = get_order_book()
+            for key, value in list(LimitOrderBook.items()):
+                if value.get('status') not in ('COMPLETE', 'REJECTED', 'CANCELLED', 'CANCELED'):
+                    status, Executed_price = order_status(key, order_book_snapshot)
                     if status:
                         value['status'] = status
                     if Executed_price not in (None, "", 0, "0"):
@@ -3417,13 +3420,9 @@ def start_Open_Position():
                 update_side_order_display(
                     key, value.get('status'), value.get('Executed_price'), value.get('Remarks')
                 )
-                        
-                #print(f"current status of {key} , with updated values {value['status']}")        
-                
         except Exception as e:
-            #print(f"Exception in open position during LimitOrderBook checking : {e}")
-            pass
-        
+            print(f"Order status refresh failed without stopping live quotes/orders: {e}")
+
         #print(f"Telegram_Message queue = {Telegram_Message}")
         try:
             if isTelegramEnable:
