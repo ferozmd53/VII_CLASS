@@ -26,11 +26,6 @@ Toots Feature :
 
 Market_Safety = 1
 
-voice_lock = Lock()
-SYSTEM_INTERNET_OK = None
-SYSTEM_EXCEL_OK = None
-BROKER_LOGIN_OK = False
-
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -48,6 +43,11 @@ from time import sleep
 import logging
 import socket
 from threading import Thread, Lock
+
+voice_lock = Lock()
+SYSTEM_INTERNET_OK = None
+SYSTEM_EXCEL_OK = None
+BROKER_LOGIN_OK = False
 import numpy as np
 
 # NumPy 2.0 removed the legacy positive/negative infinity aliases.
