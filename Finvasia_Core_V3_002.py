@@ -511,7 +511,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
         except (TypeError, ValueError):
             print(f"Live LIMIT order blocked for {tradingsymbol}: invalid LTP {price!r}.")
             return None
-        if not math.isfinite(price) or price <= 0:
+        if not np.isfinite(price) or price <= 0:
             print(f"Live LIMIT order blocked for {tradingsymbol}: invalid LTP {price!r}.")
             return None
         trigger_price = None
@@ -525,7 +525,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
         except (TypeError, ValueError):
             print(f"LIMIT order blocked for {tradingsymbol}: invalid price {price!r}.")
             return None
-        if not math.isfinite(price) or price <= 0:
+        if not np.isfinite(price) or price <= 0:
             print(f"LIMIT order blocked for {tradingsymbol}: invalid price {price!r}.")
             return None
         trigger_price = None
