@@ -1,0 +1,56 @@
+# VII_CLASS — Shoonya Excel Trade Terminal
+
+Educational and research software. Trading involves financial risk; verify every setting and broker response before using real funds.
+
+## Installation
+
+1. Download or clone this repository.
+2. Install Python 3.11–3.13 (64-bit) and Microsoft Excel.
+3. Open Command Prompt in this folder and run:
+
+```bat
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+## Login setup
+
+1. Open `Finvasia_Trade_Terminal_v3.xlsm` in Excel and enable macros.
+2. Run `python run.py`.
+3. The program creates a `LOGIN` sheet if it is not already present.
+4. Fill these cells in `LOGIN`:
+
+| Cell | Value |
+|---|---|
+| B2 | Shoonya API Client ID / API key |
+| B3 | Shoonya User ID |
+| B4 | Shoonya password |
+| B5 | TOTP secret |
+| B6 | Shoonya API secret |
+
+The first login opens a temporary Chrome/Edge window and saves the OAuth session in the workbook. A valid saved session is reused; the browser is opened again only when the saved token is invalid or expired.
+
+The access token is stored in `LOGIN!B8:B14` and a hidden `SESSION` sheet. Keep the workbook private.
+
+## Indicators
+
+The Finvasia terminal remains the main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `Trade_Terminal` columns `AD:AK`, using the same daily historical-data and indicator formulas as the Shoonya indicator project.
+
+## Start
+
+```bat
+python run.py
+```
+
+You can also pass a workbook path:
+
+```bat
+python run.py "C:\\full\\path\\Finvasia_Trade_Terminal_v3.xlsm"
+```
+
+## Source acknowledgements
+
+- Finvasia Excel terminal base: [PythonTraderExcelTradeTerminal](https://github.com/Indian-Algorithmic-Trading-Community/PythonTraderExcelTradeTerminal), `Finvasia` folder.
+- Shoonya OAuth reuse and indicator logic: [Shoonya-Multi-Symbol-Live-Historical-Data-with-Indicators](https://github.com/ferozmd53/Shoonya-Multi-Symbol-Live-Historical-Data-with-Indicators).
+
+The original Finvasia source attribution and license are retained in this repository. This project is an integration; it is not an official Shoonya or Finvasia product.
