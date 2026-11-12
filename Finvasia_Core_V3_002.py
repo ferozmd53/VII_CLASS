@@ -130,9 +130,9 @@ Token_list = {'NIFTY':26000,'MIDCPNIFTY':26074,'BANKNIFTY':26009,'FINNIFTY':2603
 try:
     TerminalSheetName = sys.argv[1]
     if not os.path.exists(TerminalSheetName):
-        TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Finvasia_Trade_Terminal_v3.xlsm")
+        TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VII_CLASS.xlsm")
 except Exception:
-    TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Finvasia_Trade_Terminal_v3.xlsm")
+    TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VII_CLASS.xlsm")
 
 # Reuse one workbook handle. Searching running Excel instances avoids the
 # ambiguous xw.Book(path) error when the same file is open more than once.
@@ -417,6 +417,8 @@ def event_handler_quote_update(inmessage):
         "ltp",
         "bp1",
         "sp1",
+        "bq1",
+        "sq1",
         "ap",
         "oi",
         "ap",
@@ -1909,8 +1911,7 @@ def start_optionchain():
                                 if pre_selected_NoOfStrike != NoOfStrike:
                                     pre_selected_NoOfStrike = NoOfStrike
                                     Option_Chain_Output.range('a3:ae500').value = None
-                                    Option_Chain_Output.range(f"a3:U500").color = (255,255,255)
-                                    Option_Chain_Output.range(f"p3:p{2 * int(NoOfStrike) + 3}").color = (46,132,198) 
+                                    Option_Chain_Output.range("a3:U500").color = (255,255,255)
                                 
                                 df_oc_pro = df_oc_pro.reset_index(drop = True)
                                 ATM_pos = df_oc_pro[df_oc_pro.strike == AtmStrike].index.values[0]
@@ -1920,6 +1921,16 @@ def start_optionchain():
                                     Option_Chain_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
                         
                                 Option_Chain_Output.range('a3').options(index=False,header=False).value = df_oc_pro
+
+                                # Shade ITM option sides and keep the strike column distinct.
+                                Option_Chain_Output.range(f"k3:k{len(df_oc_pro) + 2}").color = (242,242,242)
+                                for color_index, color_row in df_oc_pro.iterrows():
+                                    excel_row = int(color_index) + 3
+                                    strike_value = convert_to_float(color_row["strike"])
+                                    if strike_value < SpotPrice:
+                                        Option_Chain_Output.range(f"a{excel_row}:j{excel_row}").color = (221,235,247)
+                                    elif strike_value > SpotPrice:
+                                        Option_Chain_Output.range(f"l{excel_row}:u{excel_row}").color = (221,235,247)
                                 
                             except Exception as e:
                                 Option_Chain_Output.range('a3:ae500').value = None
@@ -2617,8 +2628,7 @@ def start_optionchain_Pro():
                                 if pre_selected_NoOfStrike != NoOfStrike:
                                     pre_selected_NoOfStrike = NoOfStrike
                                     Option_Chain_Pro_Output.range('a3:ae500').value = None
-                                    Option_Chain_Pro_Output.range(f"a3:U500").color = (255,255,255)
-                                    Option_Chain_Pro_Output.range(f"p3:p{2 * int(NoOfStrike) + 3}").color = (46,132,198) 
+                                    Option_Chain_Pro_Output.range("a3:U500").color = (255,255,255)
                                 
                                 df_oc_pro = df_oc_pro.reset_index(drop = True)
                                 ATM_pos = df_oc_pro[df_oc_pro.strike == AtmStrike].index.values[0]
@@ -2628,6 +2638,16 @@ def start_optionchain_Pro():
                                     Option_Chain_Pro_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
                         
                                 Option_Chain_Pro_Output.range('a3').options(index=False,header=False).value = df_oc_pro
+
+                                # Shade ITM option sides and keep the strike column distinct.
+                                Option_Chain_Pro_Output.range(f"k3:k{len(df_oc_pro) + 2}").color = (242,242,242)
+                                for color_index, color_row in df_oc_pro.iterrows():
+                                    excel_row = int(color_index) + 3
+                                    strike_value = convert_to_float(color_row["strike"])
+                                    if strike_value < SpotPrice:
+                                        Option_Chain_Pro_Output.range(f"a{excel_row}:j{excel_row}").color = (221,235,247)
+                                    elif strike_value > SpotPrice:
+                                        Option_Chain_Pro_Output.range(f"l{excel_row}:u{excel_row}").color = (221,235,247)
                                 
                             except Exception as e:
                                 Option_Chain_Pro_Output.range('a3:ae500').value = None
