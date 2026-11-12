@@ -658,6 +658,16 @@ def subscribe_new_token(exchange, Token):
     api.subscribe(symbol)
 
 LimitOrderBook = {}
+def get_live_trade_sheet(workbook):
+    """Return LIVE_TRADE, migrating the previous Trade_Terminal tab name."""
+    try:
+        return workbook.sheets("LIVE_TRADE")
+    except Exception:
+        old_sheet = workbook.sheets("Trade_Terminal")
+        old_sheet.name = "LIVE_TRADE"
+        return old_sheet
+
+
 def start_Trade_Terminal():
     #print("I am inside start_Trade_Terminal")
     global api, live_data
@@ -667,14 +677,26 @@ def start_Trade_Terminal():
     global Telegram_Message, Voice_Message    
     global subs_lst
     excel_TT = get_terminal_workbook()
-    tt = excel_TT.sheets("Trade_Terminal")
+    tt = get_live_trade_sheet(excel_TT)
     tt.range("a2:d2").value  = 0
-    tt.range("q4:s1000").value  = None
-    tt.range("u4:w1000").value  = None
-    tt.range("aa4:ac1000").value  = None
-    tt.range(f"a3:ac3").value = [ "Symbol", "Open", "High", "Low", "Close", "VWAP", "Best Buy Price",
-                                "Best Sell Price","Volume","OI", "LTP","Percentage change", "Qty", "BUY/SELL", "Entry Signal","Entry Limit Price", "Entry Done @","Entry Order ID", "Entry Remarks","Exit Signal","Exit Done @","Exit Order ID","Exit Remarks", "Target","SL" ,"Trail Enable",    "Latest SL","Trade Status","PnL"]
-    tt.range("AD3:AK3").value = ["RSI", "StochRSI", "SMA Stoch", "BB Upper", "BB Middle", "BB Lower", "BUY Signal", "SELL Signal"]
+    tt.range("r4:t1000").value  = None
+    tt.range("v4:x1000").value  = None
+    tt.range("ab4:ad1000").value  = None
+    tt.range("a3:ad3").value = [
+        "Symbol", "Open", "High", "Low", "Close", "VWAP", "Best Buy Price",
+        "Best Sell Price", "Volume", "OI", "LTP", "Percentage change",
+        "Qty", "BUY Trigger", "SELL Trigger", "Entry Signal", "Entry Limit Price",
+        "Entry Done @", "Entry Order ID", "Entry Remarks", "Exit Signal",
+        "Exit Done @", "Exit Order ID", "Exit Remarks", "Target", "SL",
+        "Trail Enable", "Latest SL", "Trade Status", "PnL"
+    ]
+    # Remove the former BUY/SELL dropdown; N and O are independent trigger inputs.
+    for trigger_range in ("N4:N1000", "O4:O1000"):
+        try:
+            tt.range(trigger_range).api.Validation.Delete()
+        except Exception:
+            pass
+    tt.range("AE3:AL3").value = ["RSI", "StochRSI", "SMA Stoch", "BB Upper", "BB Middle", "BB Lower", "BUY Signal", "SELL Signal"]
                                 
     tt.range('k1').value =  'PYTHON TRADER'
     tt.range('k1').color = (46,132,198)  
@@ -717,7 +739,7 @@ def start_Trade_Terminal():
         try:
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
-            trading_info = tt.range(f"m{4}:ac{1000}").value
+            trading_info = tt.range(f"m{4}:ad{1000}").value
             main_list = []
             indicator_list = []
 
@@ -760,31 +782,31 @@ def start_Trade_Terminal():
                                 trade_info = trading_info[idx]
                                 idx_location = idx + 2
                                 #print(f" {i} : {trade_info}")
-                                if trade_info[0] is not None and trade_info[1] is not None:
-                                    if type(trade_info[0]) is float and type(trade_info[1]) is str:
+                                if trade_info[0] is not None and (trade_info[1] is not None or trade_info[2] is not None):
+                                    if isinstance(trade_info[0], (int, float)) and (trade_info[1] is not None or trade_info[2] is not None):
                                         
                                         LTP = float(live_data[TokenKey].get("lp", 0))
                                         
                                         if Trade_Mode == 'REAL':
                                             #Real trade mode handling will handle here
-                                            if trade_info[1].upper() == "BUY" and LTP != 0:
-                                                if trade_info[2] in ['True_Market' ,'True_Limit_LTP', 'Limit_Below', 'Limit_Above']:
+                                            if _is_terminal_trigger(trade_info[1], "BUY") and LTP != 0:
+                                                if trade_info[3] in ['True_Market' ,'True_Limit_LTP', 'Limit_Below', 'Limit_Above']:
                                                     
                                                     
                                                     #0:Qty    1:BUY/SELL    2:Entry_Signal  3:Entry_Limit_Price  4:Entry_Done@  5:Entry_Order_ID 6: Entry_Remarks  7:Exit_Signal 8:Exit_Done @ 9:Exit_Order_ID  10: Exit_Remarks 11:Target    12:SL  13:Trail Enable 14: Latest_SL 15:Trade_status 16: PnL
                                                     
             
-                                                    if trade_info[15] != 'Active' and trade_info[15] != 'Entry_Pending' and trade_info[15] != 'Exit_Pending' and trade_info[15] != 'Closed' and (trade_info[15] is None or trade_info[15] == ''):
+                                                    if trade_info[16] != 'Active' and trade_info[16] != 'Entry_Pending' and trade_info[16] != 'Exit_Pending' and trade_info[16] != 'Closed' and (trade_info[16] is None or trade_info[16] == ''):
                                                         
                                                         
-                                                        if trade_info[2] == 'True_Market':
+                                                        if trade_info[3] == 'True_Market':
                                                             #Entry buy trade immediately
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","MARKET")
                                                             
                                                             if order_id is None:
-                                                                tt.range(f"O{idx_location + 2}").value = None
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                             else:    
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
@@ -793,16 +815,16 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                             
-                                                        elif trade_info[2] == 'True_Limit_LTP':    
+                                                        elif trade_info[3] == 'True_Limit_LTP':    
                                                             #Entry buy trade immediately at ltp price
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
                                                             if order_id is None:
-                                                                tt.range(f"O{idx_location + 2}").value = None
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
@@ -811,19 +833,19 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                             
-                                                        elif trade_info[2] == 'Limit_Below' and trade_info[3] is not None:
-                                                            #print(f"LTP={LTP}, trade_info[3] ={trade_info[3]}")
+                                                        elif trade_info[3] == 'Limit_Below' and trade_info[4] is not None:
+                                                            #print(f"LTP={LTP}, trade_info[4] ={trade_info[4]}")
                                                             
                                                             #handling real Limit_Below based trade
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[3])
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[4])
                                                             if order_id is None:
-                                                                tt.range(f"O{idx_location + 2}").value = None
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
@@ -832,20 +854,20 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                            
                                                             
-                                                        elif trade_info[2] == 'Limit_Above' and trade_info[3] is not None:
-                                                            #print(f"LTP={LTP}, trade_info[3] ={trade_info[3]}")
+                                                        elif trade_info[3] == 'Limit_Above' and trade_info[4] is not None:
+                                                            #print(f"LTP={LTP}, trade_info[4] ={trade_info[4]}")
                                                             
                                                             #handling real Limit_Above based trade
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[3])
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[4])
                                                             if order_id is None:
-                                                                tt.range(f"O{idx_location + 2}").value = None
+                                                                tt.range(f"N{idx_location + 2}").value = None
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
@@ -854,11 +876,11 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                             
-                                                    elif trade_info[15] == 'Entry_Pending' :
-                                                        Order_id = str(int(trade_info[5]))
+                                                    elif trade_info[16] == 'Entry_Pending' :
+                                                        Order_id = str(int(trade_info[6]))
                                                         #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
@@ -872,62 +894,62 @@ def start_Trade_Terminal():
                                                             # Order and execution messages are intentionally not spoken.
                         
                         
-                                                        tt.range(f"S{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
+                                                        tt.range(f"T{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
-                                                    elif trade_info[15] == 'Active':
+                                                    elif trade_info[16] == 'Active':
                                                         
                                                         
-                                                        PnL = (float(LTP) - float(trade_info[4])) * int(trade_info[0])
-                                                        tt.range(f"AC{idx_location + 2}").value = PnL
+                                                        PnL = (float(LTP) - float(trade_info[5])) * int(trade_info[0])
+                                                        tt.range(f"AD{idx_location + 2}").value = PnL
                                                         #print(f"PnL = {PnL}")
                                                         
                                                         TSL = 0
-                                                        if type(trade_info[12]) is float:
-                                                            if trade_info[13] == True:
-                                                                if(LTP >= trade_info[4]):
-                                                                    CUR_TSL = LTP - trade_info[4] + trade_info[12]
+                                                        if type(trade_info[13]) is float:
+                                                            if trade_info[14] == True:
+                                                                if(LTP >= trade_info[5]):
+                                                                    CUR_TSL = LTP - trade_info[5] + trade_info[13]
                                                                 else:
-                                                                    CUR_TSL = trade_info[12]
+                                                                    CUR_TSL = trade_info[13]
                                                                 
-                                                                OLD_TSL = trade_info[14]
+                                                                OLD_TSL = trade_info[15]
                                                                 if OLD_TSL is not None:
                                                                     TSL = max(CUR_TSL,OLD_TSL)
                                                                 else:
                                                                     TSL = CUR_TSL 
                                                             else:
-                                                                TSL = trade_info[12]
+                                                                TSL = trade_info[13]
                                                             
-                                                            tt.range(f"AA{idx_location + 2}").value = TSL
+                                                            tt.range(f"AB{idx_location + 2}").value = TSL
                                                         
-                                                        if trade_info[7] == 'True_Market':
+                                                        if trade_info[8] == 'True_Market':
                                                             #exit buy order immediately
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[7]) +  " exit triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","MARKET")
                                                             if order_id is None:
-                                                                tt.range(f"T{idx_location + 2}").value = None
+                                                                tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"v{idx_location + 2}").value = order_id
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
                                                                 
-                                                        elif trade_info[7] == 'True_Limit_LTP':
+                                                        elif trade_info[8] == 'True_Limit_LTP':
                                                             #exit buy at ltp limit 
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[7]) +  " exit triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
                                                             if order_id is None:
-                                                                tt.range(f"T{idx_location + 2}").value = None
+                                                                tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"v{idx_location + 2}").value = order_id
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
                                                             
-                                                        elif type(trade_info[11]) is float and trade_info[11] <= LTP:
+                                                        elif type(trade_info[12]) is float and trade_info[12] <= LTP:
                                                             #target meets, so exit the buy order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", target meets so exit triggered"
                                                             logger.info(Message)
@@ -939,7 +961,7 @@ def start_Trade_Terminal():
                                                             tt.range(f"v{idx_location + 2}").value = order_id
                                                             tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
                                                         
-                                                        elif TSL >= LTP and type(trade_info[12]) is float:
+                                                        elif TSL >= LTP and type(trade_info[13]) is float:
                                                             #sl meets, so exiting the buy order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", TSL meets so exit triggered"
                                                             logger.info(Message)
@@ -952,8 +974,8 @@ def start_Trade_Terminal():
                                                             tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
                                                             
                                                     
-                                                    elif trade_info[15] ==  'Exit_Pending':
-                                                        Order_id = str(int(trade_info[9]))
+                                                    elif trade_info[16] ==  'Exit_Pending':
+                                                        Order_id = str(int(trade_info[10]))
                                                         #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
@@ -961,28 +983,28 @@ def start_Trade_Terminal():
                                                             tt.range(f"u{idx_location + 2}").value = Executed_price
                                                             tt.range(f"Ab{idx_location + 2}").value = 'Closed'
                                                             
-                                                            PnL = (float(Executed_price) - float(trade_info[4])) * int(trade_info[0])
-                                                            tt.range(f"AC{idx_location + 2}").value = PnL
+                                                            PnL = (float(Executed_price) - float(trade_info[5])) * int(trade_info[0])
+                                                            tt.range(f"AD{idx_location + 2}").value = PnL
                                                             
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Sold at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
                                                             
                                                             Telegram_Message.append(Message)
                                                             # Order and execution messages are intentionally not spoken.
                                                             
-                                                        tt.range(f"W{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
+                                                        tt.range(f"X{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
-                                            if trade_info[1].upper() == "SELL" and LTP != 0:
+                                            if _is_terminal_trigger(trade_info[2], "SELL") and LTP != 0:
                                                 
-                                                if trade_info[2] in ['True_Market' , 'True_Limit_LTP' , 'Limit_Below' , 'Limit_Above']:
+                                                if trade_info[3] in ['True_Market' , 'True_Limit_LTP' , 'Limit_Below' , 'Limit_Above']:
                                                     #0:Qty    1:BUY/SELL    2:Entry_Signal  3:Entry_Limit_Price  4:Entry_Done@  5:Entry_Order_ID 6: Entry_Remarks  7:Exit_Signal 8:Exit_Done @ 9:Exit_Order_ID   10:Target    11:SL  12:Trail Enable 13: Latest_SL 14:Trade_status 15: PnL
                                                     
                                                     
-                                                    if trade_info[15] != 'Active' and trade_info[15] != 'Entry_Pending' and trade_info[15] != 'Exit_Pending' and trade_info[15] != 'Closed' and (trade_info[15] is None or trade_info[15] == '' ):
+                                                    if trade_info[16] != 'Active' and trade_info[16] != 'Entry_Pending' and trade_info[16] != 'Exit_Pending' and trade_info[16] != 'Closed' and (trade_info[16] is None or trade_info[16] == '' ):
                                                 
-                                                        if trade_info[2] == 'True_Market':
+                                                        if trade_info[3] == 'True_Market':
                                                             #entry sell order immediately
                                                             
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","MARKET")
@@ -995,15 +1017,15 @@ def start_Trade_Terminal():
                                                                 tt.range(f"r{idx_location + 2}").value = order_id
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                                 #print("b")
                                                             
-                                                        elif trade_info[2] == 'True_Limit_LTP':    
+                                                        elif trade_info[3] == 'True_Limit_LTP':    
                                                             #Entry buy trade immediately at ltp price
                                                             
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
@@ -1017,16 +1039,16 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                                 
-                                                        elif trade_info[2] == 'Limit_Above' and trade_info[3] is not None:
+                                                        elif trade_info[3] == 'Limit_Above' and trade_info[4] is not None:
                                                             
                                                             #handling real Limit_Above based trade
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[3])
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[4])
                                                             if order_id is None:
                                                                 tt.range(f"O{idx_location + 2}").value = None
                                                             else: 
@@ -1037,16 +1059,16 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                             
                                                                     
-                                                        elif trade_info[2] == 'Limit_Below' and trade_info[3] is not None:
+                                                        elif trade_info[3] == 'Limit_Below' and trade_info[4] is not None:
                                                                                                                        #handling real Limit_Above based trade
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[1]) + ", " + str(trade_info[2])+ ", " + str(trade_info[3])+ " triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[3])
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[4])
                                                             
                                                             if order_id is None:
                                                                 tt.range(f"O{idx_location + 2}").value = None
@@ -1058,12 +1080,12 @@ def start_Trade_Terminal():
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"u{idx_location + 2}").value = None
                                                                 tt.range(f"v{idx_location + 2}").value = None
-                                                                tt.range(f"AA{idx_location + 2}").value = None
-                                                                tt.range(f"AC{idx_location + 2}").value = None
+                                                                tt.range(f"AB{idx_location + 2}").value = None
+                                                                tt.range(f"AD{idx_location + 2}").value = None
                                                             
                                                         
-                                                    elif trade_info[15] == 'Entry_Pending' :
-                                                        Order_id = str(int(trade_info[5]))
+                                                    elif trade_info[16] == 'Entry_Pending' :
+                                                        Order_id = str(int(trade_info[6]))
                                                         #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
@@ -1076,63 +1098,63 @@ def start_Trade_Terminal():
                                                             Telegram_Message.append(Message)
                                                             # Order and execution messages are intentionally not spoken.
                                                             
-                                                        tt.range(f"S{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
+                                                        tt.range(f"T{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                                                         
-                                                    elif trade_info[15] == 'Active':
+                                                    elif trade_info[16] == 'Active':
                                                         
-                                                        PnL = (float(trade_info[4]) - float(LTP) ) * int(trade_info[0])
-                                                        tt.range(f"AC{idx_location + 2}").value = PnL
+                                                        PnL = (float(trade_info[5]) - float(LTP) ) * int(trade_info[0])
+                                                        tt.range(f"AD{idx_location + 2}").value = PnL
                                                         
                                                         TSL = 9999999
                                                         
-                                                        if type(trade_info[12]) is float:
-                                                            if trade_info[13] == True :
-                                                                if(LTP <= trade_info[4]):
-                                                                    CUR_TSL = trade_info[12] - (trade_info[4] - LTP )
+                                                        if type(trade_info[13]) is float:
+                                                            if trade_info[14] == True :
+                                                                if(LTP <= trade_info[5]):
+                                                                    CUR_TSL = trade_info[13] - (trade_info[5] - LTP )
                                                                 else:
-                                                                    CUR_TSL = trade_info[12]
+                                                                    CUR_TSL = trade_info[13]
                                                                 
-                                                                OLD_TSL = trade_info[14]
+                                                                OLD_TSL = trade_info[15]
                                                                 if OLD_TSL is not None:
                                                                     TSL = min(CUR_TSL,OLD_TSL)
                                                                 else:
                                                                     TSL = CUR_TSL 
                                                             else:
-                                                                TSL = trade_info[12]
+                                                                TSL = trade_info[13]
                                                             
-                                                            tt.range(f"AA{idx_location + 2}").value = TSL
+                                                            tt.range(f"AB{idx_location + 2}").value = TSL
                                                             
                                                         
-                                                        if trade_info[7] == 'True_Market':
+                                                        if trade_info[8] == 'True_Market':
                                                             #exit sell order immediately
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[7]) +  " exit triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","MARKET")
                                                             if order_id is None:
-                                                                tt.range(f"T{idx_location + 2}").value = None
+                                                                tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                     
                                                                 tt.range(f"v{idx_location + 2}").value = order_id
                                                                 tt.range(f"Ab{idx_location + 2}").value = "Exit_Pending"
                                                                 
-                                                        elif trade_info[7] == 'True_Limit_LTP':
+                                                        elif trade_info[8] == 'True_Limit_LTP':
                                                             #exit SELL at ltp limit 
-                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[7]) +  " exit triggered"
+                                                            Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
                                                             
                                                             if order_id is None:
-                                                                tt.range(f"T{idx_location + 2}").value = None
+                                                                tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 tt.range(f"v{idx_location + 2}").value = order_id
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'    
                                                                 
-                                                        elif type(trade_info[11]) is float and trade_info[11] >= LTP:
+                                                        elif type(trade_info[12]) is float and trade_info[12] >= LTP:
                                                             #target meets, so exiting the sell order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", target meets so exit triggered"
                                                             logger.info(Message)
@@ -1145,7 +1167,7 @@ def start_Trade_Terminal():
                                                             tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
                                                             
                                                         
-                                                        elif TSL <= LTP and type(trade_info[12]) is float:
+                                                        elif TSL <= LTP and type(trade_info[13]) is float:
                                                             #sl hit, so exiting the sell order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", TSL meets so exit triggered"
                                                             logger.info(Message)
@@ -1162,8 +1184,8 @@ def start_Trade_Terminal():
                                                                 tt.range(f"v{idx_location + 2}").value = order_id
                                                                 tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
                                                             
-                                                    elif trade_info[15] ==  'Exit_Pending':
-                                                        Order_id = str(int(trade_info[9]))
+                                                    elif trade_info[16] ==  'Exit_Pending':
+                                                        Order_id = str(int(trade_info[10]))
                                                         #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
@@ -1171,15 +1193,15 @@ def start_Trade_Terminal():
                                                             tt.range(f"u{idx_location + 2}").value = Executed_price
                                                             tt.range(f"Ab{idx_location + 2}").value = 'Closed'
                                                             
-                                                            PnL = (float(trade_info[4]) - float(Executed_price)) * int(trade_info[0])
-                                                            tt.range(f"AC{idx_location + 2}").value = PnL
+                                                            PnL = (float(trade_info[5]) - float(Executed_price)) * int(trade_info[0])
+                                                            tt.range(f"AD{idx_location + 2}").value = PnL
                                                             
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " buyback at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
                                                             
                                                             Telegram_Message.append(Message)
                                                             # Order and execution messages are intentionally not spoken.
                                                             
-                                                        tt.range(f"W{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
+                                                        tt.range(f"X{idx_location + 2}").value = LimitOrderBook[Order_id]['Remarks']
                             except Exception as e:
                                 Message = "Exception occur in core order book management:" + str(e)
                                 #print(Message)
@@ -1194,7 +1216,7 @@ def start_Trade_Terminal():
                 idx += 1
 
             tt.range("b4:l1000").value = main_list
-            tt.range("AD4:AK1000").value = indicator_list
+            tt.range("AE4:AL1000").value = indicator_list
                 
         except Exception as e:
             #print(f"Exception : {str(e)}")
@@ -2814,7 +2836,7 @@ def start_Open_Position():
     
     excel_op = get_terminal_workbook()
     op_op = excel_op.sheets("OpenPosition")
-    op_tt = excel_op.sheets("Trade_Terminal")
+    op_tt = get_live_trade_sheet(excel_op)
     op_hold = excel_op.sheets("Holdings")
     op_config = get_login_settings_sheet(excel_op)
     op_ob = excel_op.sheets("OrderBook")
@@ -3056,4 +3078,11 @@ if Shoonya_login() == 1:
 else:
     BROKER_LOGIN_OK = False
     Text2Speech("Warning. Shoonya login failed. No live trading will start.")
-    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection.")
+    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection."def _is_terminal_trigger(value, side):
+    """Accept an explicit BUY/SELL command or a truthy Excel trigger value."""
+    if value is None:
+        return False
+    return str(value).strip().upper() in (side, "TRUE", "1", "YES", "ON")
+
+
+)
