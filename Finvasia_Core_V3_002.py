@@ -572,12 +572,24 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
                 price = float( "{:.1f}".format(result) )
         
         
-    selected_product_type = Product_type if row_product_type == "__GLOBAL__" else row_product_type
-    selected_product_type = str(selected_product_type or "").strip().upper()
     product_map = {"CNC": "C", "MIS": "I", "NRML": "M", "NORMAL": "M"}
+    row_product = str(row_product_type or "").strip().upper()
+    global_product = str(Product_type or "").strip().upper()
+    selected_product_type = row_product if row_product in product_map else global_product
     if selected_product_type not in product_map:
-        print(f"Live order blocked for {tradingsymbol}: select CNC, MIS or NRML in that symbol's Order Type cell.")
+        print(
+            f"Live order blocked for {tradingsymbol}: choose CNC, MIS or NRML "
+            "in this row's Order Type cell or the global Order Type selector."
+        )
         return None
+    # When a row has no override, show the inherited global product in its cell.
+    if not row_product and display_row is not None:
+        try:
+            product_cell = get_live_trade_sheet(get_terminal_workbook()).range(f"AE{int(display_row)}")
+            if not str(product_cell.value or "").strip():
+                product_cell.value = selected_product_type
+        except Exception as product_display_error:
+            print(f"Could not display inherited Order Type for {tradingsymbol}: {product_display_error}")
     product = product_map[selected_product_type]
     Message = "Order Details : buy_or_sell = " + str(buy_or_sell[0]) + ", product_type = " + str(product)+ ", exchange = " + str(exchange)+ ", tradingsymbol = " + str(tradingsymbol)+ ", quantity = " + str(quantity)+ ", price_type = " + str(price_type)+ ", price = " + str(price)+ ", trigger_price = " + str(trigger_price)
     logger.info(Message)
