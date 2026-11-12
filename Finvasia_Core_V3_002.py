@@ -476,7 +476,7 @@ def order_status(orderid):
         print(Message)
     return status, AverageExecutedPrice
 
-def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, row_product_type = None):
+def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, row_product_type = "__GLOBAL__"):
     global api, BROKER_LOGIN_OK, SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK, feed_opened
     if not BROKER_LOGIN_OK:
         print("Live order blocked: Shoonya login is not active.")
@@ -556,7 +556,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
                 price = float( "{:.1f}".format(result) )
         
         
-    selected_product_type = row_product_type if row_product_type is not None and str(row_product_type).strip() else Product_type
+    selected_product_type = Product_type if row_product_type == "__GLOBAL__" else row_product_type
     selected_product_type = str(selected_product_type or "").strip().upper()
     product_map = {"CNC": "C", "MIS": "I", "NRML": "M", "NORMAL": "M"}
     if selected_product_type not in product_map:
