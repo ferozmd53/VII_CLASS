@@ -1,6 +1,6 @@
 # VII_CLASS — Shoonya Excel Trade Terminal
 
-Educational and research software. Trading involves financial risk; verify every setting and broker response before using real funds.
+Live Shoonya trading terminal. This version is REAL mode only: trade triggers submit actual broker orders. There is no paper-trading mode. Trading involves financial risk; verify every setting, quantity, product type and broker response before enabling live triggers.
 
 ## Installation
 
@@ -38,7 +38,16 @@ pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.
 
 The first login opens a temporary Chrome/Edge window and saves the OAuth session in the workbook. A valid saved session is reused; the browser is opened again only when the saved token is invalid or expired.
 
-The access token is stored in `LOGIN!B8:B14` and a hidden `SESSION` sheet. Keep the workbook private.
+The access token is stored in `LOGIN!B8:B14` and a hidden `SESSION` sheet. Keep the workbook private. The terminal uses the `LOGIN` sheet as the main settings sheet; legacy `Config` settings are copied into `LOGIN` on first startup.
+
+
+## Live-only trading and alerts
+
+- The trade terminal forces Trade_Terminal!S2 to REAL; paper/simulated fills are removed.
+- A live order is blocked when Shoonya login is not active, internet is unavailable, or the Excel workbook is not accessible.
+- Voice alerts announce login failure, internet loss/recovery, Excel workbook disconnect/recovery, and WebSocket disconnect/connection failure.
+- The Standard and PRO option-chain outputs retain IV and market data. Delta, Gamma, Theta, Vega and Rho columns are removed.
+- Excel disconnect alerts require the Python terminal process to remain running. If Windows terminates Python itself, that process cannot speak an alert.
 
 ## Indicators
 
