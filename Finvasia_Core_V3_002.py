@@ -740,7 +740,8 @@ def update_side_order_display(order_id, status, executed_price=None, remarks=Non
         sheet.range(f"{status_col}{row_number}").value = display_status
         if display_status == "COMPLETE" and executed_price not in (None, "", 0, "0"):
             sheet.range(f"{price_col}{row_number}").value = executed_price
-        elif display_status in ("REJECTED", "CANCELLED", "CANCELED") and remarks:
+        elif (display_status in ("REJECTED", "CANCELLED", "CANCELED") and remarks
+              and str(remarks).strip().upper() != display_status):
             sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {remarks}"
     except Exception as exc:
         print(f"Could not refresh side order {order_id}: {exc}")
