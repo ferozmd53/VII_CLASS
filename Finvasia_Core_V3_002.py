@@ -2971,17 +2971,7 @@ def start_Open_Position():
             #print(f"Exception in telegram Send Message : {e}")
             pass
             
-        try:
-            if isVoiceEnable:
-                if len(Voice_Message) > 0:
-                    Text2Speech(Voice_Message[0])
-                    del Voice_Message[0]
-        
-        
-        except Exception as e:
-            #print(f"Exception in voice Message : {e}")
-            pass
-                
+        # Trade/order voice queue intentionally disabled; direct system alerts remain active.
 def getholdings():  
     #print("I am inside getholdings")
     global api
