@@ -616,6 +616,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     logger.info(Message)
     Telegram_Message.append(Message)
     print(f"Order id = {order_id}")
+    register_side_order_display(symbol, buy_or_sell, str(order_id))
     return str(order_id)
 
 def get_order_book():
@@ -685,6 +686,64 @@ def subscribe_new_token(exchange, Token):
     api.subscribe(symbol)
 
 LimitOrderBook = {}
+
+# Side-specific order display is independent of the legacy Entry/Exit state machine.
+SIDE_ORDER_TRACKER = {}
+SIDE_ORDER_TRACKER_LOCK = Lock()
+
+
+def register_side_order_display(symbol, side, order_id):
+    """Write the broker order ID into the matching BUY or SELL display columns."""
+    try:
+        side = str(side).strip().upper()
+        if side not in ("BUY", "SELL"):
+            return
+        workbook = get_terminal_workbook()
+        sheet = get_live_trade_sheet(workbook)
+        symbols = sheet.range("A4:A1000").value
+        row_number = next(
+            (row_index + 4 for row_index, value in enumerate(symbols)
+             if str(value or "").strip() == str(symbol).strip()),
+            None,
+        )
+        if row_number is None:
+            print(f"Could not locate {symbol} in LIVE_TRADE for side order display.")
+            return
+        id_col, status_col = ("AF", "AG") if side == "BUY" else ("AI", "AJ")
+        sheet.range(f"{id_col}{row_number}").number_format = "@"
+        sheet.range(f"{id_col}{row_number}").value = str(order_id)
+        sheet.range(f"{status_col}{row_number}").value = "SUBMITTED"
+        with SIDE_ORDER_TRACKER_LOCK:
+            SIDE_ORDER_TRACKER[str(order_id)] = {
+                "row": row_number, "side": side, "symbol": str(symbol),
+            }
+    except Exception as exc:
+        print(f"Could not update {side} order display for {symbol}: {exc}")
+
+
+def update_side_order_display(order_id, status, executed_price=None, remarks=None):
+    """Reflect broker-confirmed status/fill in the matching side-specific columns."""
+    try:
+        with SIDE_ORDER_TRACKER_LOCK:
+            tracked = SIDE_ORDER_TRACKER.get(str(order_id))
+        if not tracked:
+            return
+        row_number = tracked["row"]
+        if tracked["side"] == "BUY":
+            status_col, price_col = "AG", "AH"
+        else:
+            status_col, price_col = "AJ", "AK"
+        sheet = get_live_trade_sheet(get_terminal_workbook())
+        display_status = str(status or "").strip().upper()
+        if not display_status or display_status == "PENDING":
+            display_status = "PENDING"
+        sheet.range(f"{status_col}{row_number}").value = display_status
+        if display_status == "COMPLETE" and executed_price not in (None, "", 0, "0"):
+            sheet.range(f"{price_col}{row_number}").value = executed_price
+        elif display_status in ("REJECTED", "CANCELLED", "CANCELED") and remarks:
+            sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {remarks}"
+    except Exception as exc:
+        print(f"Could not refresh side order {order_id}: {exc}")
 def _is_terminal_trigger(value, side):
     """Accept an explicit BUY/SELL command or a truthy Excel trigger value."""
     if value is None:
@@ -747,7 +806,11 @@ def start_Trade_Terminal():
 
     # Insert per-symbol Order Type once and preserve the existing indicator values.
     if str(tt.range("AE3").value or "").strip().upper() != "ORDER TYPE":
-        tt.range("AE3:AL1000").copy(destination=tt.range("AF3:AM1000"))
+        tt.range("AE3:AL1000").copy(destination=tt.range("AL3:AS1000"))
+    # One-time migration for workbooks that already have Order Type in AE but indicators in AF:AM.
+    if (str(tt.range("AF3").value or "").strip().upper() == "RSI"
+            and str(tt.range("AL3").value or "").strip().upper() != "RSI"):
+        tt.range("AF3:AM1000").copy(destination=tt.range("AL3:AS1000"))
     tt.range("a2:d2").value  = 0
     tt.range("r4:t1000").value  = None
     tt.range("v4:x1000").value  = None
@@ -756,9 +819,9 @@ def start_Trade_Terminal():
         "Symbol", "Open", "High", "Low", "Close", "VWAP", "Best Buy Price",
         "Best Sell Price", "Volume", "OI", "LTP", "Percentage change",
         "Qty", "BUY Trigger", "SELL Trigger", "Entry Signal", "Entry Limit Price",
-        "Entry Done @", "Entry Order ID", "", "Exit Signal",
-        "Exit Done @", "Exit Order ID", "", "Target", "SL",
-        "Trail Enable", "Latest SL", "Trade Status", "PnL"
+        "Entry Done @", "Entry Order ID (Internal)", "", "Exit Signal",
+        "Exit Done @", "Exit Order ID (Internal)", "", "Target", "SL",
+        "Trail Enable", "Latest SL", "Overall Trade Status", "Realized PnL"
     ]
     tt.range("AE3").value = "Order Type"
     try:
@@ -783,7 +846,18 @@ def start_Trade_Terminal():
             tt.range(trigger_range).api.Validation.Delete()
         except Exception:
             pass
-    tt.range("AF3:AM3").value = ["RSI", "StochRSI", "SMA Stoch", "BB Upper", "BB Middle", "BB Lower", "BUY Signal", "SELL Signal"]
+    tt.range("AF3:AK3").value = ["BUY Order ID", "BUY Status", "BUY Executed Price", "SELL Order ID", "SELL Status", "SELL Executed Price"]
+    tt.range("AL3:AS3").value = ["RSI", "StochRSI", "SMA Stoch", "BB Upper", "BB Middle", "BB Lower", "BUY Signal", "SELL Signal"]
+    for order_id_col in ("AF", "AI"):
+        tt.range(f"{order_id_col}4:{order_id_col}1000").number_format = "@"
+    for order_status_col in ("AG", "AJ"):
+        tt.range(f"{order_status_col}4:{order_status_col}1000").number_format = "@"
+    tt.range("AF:AK").column_width = 18
+    tt.range("AG:AG").column_width = 24
+    tt.range("AJ:AJ").column_width = 24
+    # Keep legacy Entry/Exit IDs for the trade state machine, but hide them from the user.
+    for internal_col in ("S:S", "T:T", "W:W", "X:X"):
+        tt.range(internal_col).api.EntireColumn.Hidden = True
                                 
     tt.range('k1').value =  'PYTHON TRADER'
     tt.range('k1').color = (46,132,198)  
@@ -1315,7 +1389,7 @@ def start_Trade_Terminal():
                 idx += 1
 
             tt.range("b4:l1000").value = main_list
-            tt.range("AF4:AM1000").value = indicator_list
+            tt.range("AL4:AS1000").value = indicator_list
                 
         except Exception as e:
             #print(f"Exception : {str(e)}")
@@ -3077,6 +3151,9 @@ def start_Open_Position():
                     elif status in ['REJECTED']:
                         value['status'] = 'REJECTED'
                     value['Remarks'] = status
+                update_side_order_display(
+                    key, value.get('status'), value.get('Executed_price'), value.get('Remarks')
+                )
                         
                 #print(f"current status of {key} , with updated values {value['status']}")        
                 
