@@ -1130,6 +1130,58 @@ def start_Trade_Terminal():
             with subscription_lock:
                 subscription_pending.discard(symbol)
 
+    def write_live_market_data():
+        """Write LTP/OHLC/quotes on its own loop, independent of order processing."""
+        pythoncom = None
+        try:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pythoncom = None
+
+            market_sheet = get_live_trade_sheet(get_terminal_workbook())
+            print("Independent live market-data writer started (LTP/OHLC/Bid/Ask/Volume/OI).")
+            while True:
+                try:
+                    market_symbols = market_sheet.range("A4:A1000").value
+                    market_rows = []
+                    for market_symbol in market_symbols:
+                        values = [None] * 11
+                        if market_symbol:
+                            token_key = Symbol_Token.get(str(market_symbol).strip())
+                            if token_key:
+                                with LIVE_DATA_LOCK:
+                                    quote_snapshot = dict(live_data.get(token_key, {}))
+                                values = [
+                                    quote_snapshot.get("o", "-"),
+                                    quote_snapshot.get("h", "-"),
+                                    quote_snapshot.get("l", "-"),
+                                    quote_snapshot.get("c", "-"),
+                                    quote_snapshot.get("ap", "-"),
+                                    quote_snapshot.get("bp1", "-"),
+                                    quote_snapshot.get("sp1", "-"),
+                                    quote_snapshot.get("v", "-"),
+                                    quote_snapshot.get("oi", "-"),
+                                    quote_snapshot.get("lp", "-"),
+                                    quote_snapshot.get("pc", "-"),
+                                ]
+                        market_rows.append(values)
+                    market_sheet.range("B4:L1000").value = market_rows
+                except Exception as market_error:
+                    print(f"Live market-data refresh error (order workers continue): {market_error}")
+                sleep(0.15)
+        except Exception as writer_error:
+            print(f"Live market-data writer stopped: {writer_error}")
+        finally:
+            try:
+                if pythoncom is not None:
+                    pythoncom.CoUninitialize()
+            except Exception:
+                pass
+
+    Thread(target=write_live_market_data, daemon=True, name="LiveMarketDataWriter").start()
+
     global LimitOrderBook
     #run a parallel thread to update the status
     while True:
@@ -1650,7 +1702,8 @@ def start_Trade_Terminal():
 
                 idx += 1
 
-            tt.range("b4:l1000").value = main_list
+            # B:L market quotes are written by LiveMarketDataWriter so a
+            # slow order/strategy task cannot pause LTP and OHLC updates.
             tt.range("AG4:AN1000").value = indicator_list
             tt.range("AA4:AF1000").value = tt.range("BM4:BR1000").value
             # Yield to Excel's UI/event queue; the previous tight loop starved typing.
