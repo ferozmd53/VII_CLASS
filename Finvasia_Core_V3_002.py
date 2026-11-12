@@ -164,7 +164,7 @@ def get_login_settings_sheet(workbook):
                 workbook.sheets["Config"].used_range.copy(destination=login_sheet.range("D1"))
                 print("Migrated Config sheet settings into LOGIN (starting at column D).")
             except Exception as exc:
-                print(f"Config migration warning: {exc}")
+                raise RuntimeError(f"Could not migrate Config sheet into LOGIN: {exc}")
         # Preserve legacy Telegram settings without relying on User_Credential.
         if "User_Credential" in sheet_names:
             legacy = workbook.sheets["User_Credential"]
