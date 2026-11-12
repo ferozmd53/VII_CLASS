@@ -2124,7 +2124,8 @@ def GetToken(Exchange,Symbol, Type = 'FUT' ,Expiry=None,Strike = None):
             if Symbol in IndexList:    
                 Token = Token_list[Symbol]
                 isTokenFound = True
-            else:                df_ins_temp = df_ins_BSE[df_ins_BSE.Symbol == Symbol]
+            else:
+                df_ins_temp = df_ins_BSE[df_ins_BSE.Symbol == Symbol]
                 if len(df_ins_temp) > 0:
                     Token = df_ins_temp.iloc[0]['Token']
                     isTokenFound = True
