@@ -134,6 +134,51 @@ try:
 except Exception:
     TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Finvasia_Trade_Terminal_v3.xlsm")
 
+# Reuse one workbook handle. Searching running Excel instances avoids the
+# ambiguous xw.Book(path) error when the same file is open more than once.
+excel_workbook = None
+excel_workbook_lock = Lock()
+
+
+def get_terminal_workbook():
+    global excel_workbook
+    target_path = os.path.normcase(os.path.abspath(TerminalSheetName))
+
+    with excel_workbook_lock:
+        if excel_workbook is not None:
+            try:
+                if os.path.normcase(os.path.abspath(excel_workbook.fullname)) == target_path:
+                    _ = excel_workbook.sheets[0].name
+                    return excel_workbook
+            except Exception:
+                excel_workbook = None
+
+        matches = []
+        try:
+            for app in xw.apps:
+                for book in app.books:
+                    try:
+                        book_path = os.path.normcase(os.path.abspath(book.fullname))
+                        if book_path == target_path:
+                            matches.append(book)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        if matches:
+            if len(matches) > 1:
+                print(
+                    "WARNING: Terminal workbook is open in "
+                    f"{len(matches)} Excel instances. Reusing the first "
+                    "existing instance without opening another copy."
+                )
+            excel_workbook = matches[0]
+            return excel_workbook
+
+        excel_workbook = xw.Book(TerminalSheetName)
+        return excel_workbook
+
 
 def Text2Speech(Text):
     """Speak a message using one serialized Windows TTS engine."""
@@ -174,7 +219,7 @@ def internet_is_available():
 
 def system_health_monitor():
     """Speak on internet or Excel workbook disconnect/recovery transitions."""
-    global SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK
+    global SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK, BROKER_LOGIN_OK
     previous_internet = None
     previous_excel = None
     broker_check_counter = 0
@@ -190,7 +235,7 @@ def system_health_monitor():
 
         excel_ok = False
         try:
-            workbook = xw.Book(TerminalSheetName)
+            workbook = get_terminal_workbook()
             _ = workbook.sheets["LOGIN"].range("B3").value
             excel_ok = True
         except Exception:
@@ -252,7 +297,7 @@ def Shoonya_login():
     client_name = ""
     isConnected = 0
     try:
-        excel_name = xw.Book(TerminalSheetName)
+        excel_name = get_terminal_workbook()
     except Exception as exc:
         print(f"Excel workbook could not be opened: {exc}")
         Text2Speech("Warning. Excel workbook is unavailable. Shoonya login cannot start.")
@@ -441,7 +486,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
         print("Live order blocked: Excel workbook is unavailable.")
         return None
     try:
-        _ = xw.Book(TerminalSheetName).sheets["LOGIN"].range("B3").value
+        _ = get_terminal_workbook().sheets["LOGIN"].range("B3").value
     except Exception:
         print("Live order blocked: Excel workbook is not available.")
         return None
@@ -593,7 +638,7 @@ def start_Trade_Terminal():
     global Trade_Mode
     global Telegram_Message, Voice_Message    
     global subs_lst
-    excel_TT = xw.Book(TerminalSheetName)
+    excel_TT = get_terminal_workbook()
     tt = excel_TT.sheets("Trade_Terminal")
     tt.range("a2:d2").value  = 0
     tt.range("q4:s1000").value  = None
@@ -1275,7 +1320,7 @@ def start_optionchain():
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
     
     global subs_lst
-    excel_name = xw.Book(TerminalSheetName)
+    excel_name = get_terminal_workbook()
     oci = excel_name.sheets("Option_Chain_Input")
     Option_Chain_Output = excel_name.sheets("Option_Chain_Output")
     prepare_option_chain_output(Option_Chain_Output)
@@ -1983,7 +2028,7 @@ def start_optionchain_Pro():
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
     
     global subs_lst
-    excel_name = xw.Book(TerminalSheetName)
+    excel_name = get_terminal_workbook()
     oci_pro = excel_name.sheets("Option_Chain_Pro_Input")
     Option_Chain_Pro_Output = excel_name.sheets("Option_Chain_Pro_Output")
     prepare_option_chain_output(Option_Chain_Pro_Output)
@@ -2704,7 +2749,7 @@ df_openPosition = pd.DataFrame()
 
 def start_Open_Position():
     
-    excel_op = xw.Book(TerminalSheetName)
+    excel_op = get_terminal_workbook()
     op_op = excel_op.sheets("OpenPosition")
     op_tt = excel_op.sheets("Trade_Terminal")
     op_hold = excel_op.sheets("Holdings")
@@ -2896,7 +2941,7 @@ def getholdings():
     return df_holding
     
 def StartThread():
-    excel_name = xw.Book(TerminalSheetName)
+    excel_name = get_terminal_workbook()
     Config_sheet = get_login_settings_sheet(excel_name)
     try:
         
