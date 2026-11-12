@@ -497,7 +497,8 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
     tradingsymbol = symbol[4:]
     exchange = symbol[:3]
     
-    if order_type == 'MARKET':        price = 0
+    if order_type == 'MARKET':
+        price = 0
         trigger_price = None
         price_type = "MKT"
     elif order_type == 'LIMIT':
