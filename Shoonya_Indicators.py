@@ -154,13 +154,18 @@ class IndicatorEngine:
         if frame is None or frame.empty:
             return self._empty()
 
-        closes = frame["close"].astype(float).tolist()
         today = datetime.now().date()
         latest_day = frame["datetime"].iloc[-1].date()
         if latest_day == today:
-            closes[-1] = ltp
+            frame.loc[frame.index[-1], "close"] = ltp
         else:
-            closes.append(ltp)
+            # Add today's working candle once, then update its close on each tick.
+            new_bar = frame.iloc[-1].copy()
+            new_bar["datetime"] = pd.Timestamp(today)
+            new_bar["close"] = ltp
+            frame = pd.concat([frame, pd.DataFrame([new_bar])], ignore_index=True)
+        self.history[key] = frame
+        closes = frame["close"].astype(float).tolist()
         if len(closes) < self.length_bb + 2:
             return self._empty()
 
