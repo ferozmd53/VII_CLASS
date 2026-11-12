@@ -694,6 +694,30 @@ def start_Trade_Terminal():
     global subs_lst
     excel_TT = get_terminal_workbook()
     tt = get_live_trade_sheet(excel_TT)
+
+    # One-time migration from the former M:AC layout to the new M:AD layout.
+    # Preserve existing trade inputs/formulas and move the old direction dropdown
+    # into the independent BUY and SELL trigger columns.
+    old_n_header = str(tt.range("N3").value or "").strip().upper()
+    old_o_header = str(tt.range("O3").value or "").strip().upper()
+    if old_n_header in ("BUY/SELL", "BUY / SELL") or old_o_header == "ENTRY SIGNAL":
+        try:
+            tt.range("O4:AC1000").copy(destination=tt.range("P4:AD1000"))
+            tt.range("AD3:AK1000").copy(destination=tt.range("AE3:AL1000"))
+            old_directions = tt.range("N4:N1000").value
+            tt.range("N4:N1000").value = [
+                "BUY" if str(value or "").strip().upper() == "BUY" else None
+                for value in old_directions
+            ]
+            tt.range("O4:O1000").value = [
+                "SELL" if str(value or "").strip().upper() == "SELL" else None
+                for value in old_directions
+            ]
+            tt.range("AD4:AD1000").value = None
+            print("Migrated old Trade_Terminal columns to the LIVE_TRADE layout.")
+        except Exception as migration_error:
+            raise RuntimeError(f"LIVE_TRADE column migration failed: {migration_error}")
+
     tt.range("a2:d2").value  = 0
     tt.range("r4:t1000").value  = None
     tt.range("v4:x1000").value  = None
