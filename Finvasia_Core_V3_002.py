@@ -1184,7 +1184,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1203,7 +1202,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1225,7 +1223,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1248,7 +1245,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"O{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1395,7 +1391,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"U{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                             
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1417,7 +1412,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"U{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1438,7 +1432,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"U{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1460,7 +1453,6 @@ def start_Trade_Terminal():
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
-                                                                tt.range(f"U{excel_row}").value = None
                                                                 register_pending_order(order_id)
                                                                 
                                                                 tt.range(f"BF{excel_row}").value = None
@@ -1612,6 +1604,8 @@ def start_Trade_Terminal():
         except Exception as e:
             #print(f"Exception : {str(e)}")
             pass
+        # Keep Excel responsive even when a COM read/write cycle raises an exception.
+        sleep(0.20)
 
 def get_position():
     #print(f"I am inside get_position")
@@ -3358,7 +3352,7 @@ def start_Open_Position():
             
             for key, value in LimitOrderBook.items():
                 #print(f"check status of {key} , having current status {value['status']}")
-                if value['status'] == 'PENDING':
+                if value['status'] not in ('COMPLETE', 'REJECTED', 'CANCELLED', 'CANCELED'):
                     status, Executed_price = order_status (key)
                     #print(f"filled_quantity = {filled_quantity},Executed_price={Executed_price}, status={status} ")
                     if status:
