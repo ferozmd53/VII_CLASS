@@ -116,10 +116,9 @@ Token_list = {'NIFTY':26000,'MIDCPNIFTY':26074,'BANKNIFTY':26009,'FINNIFTY':2603
 try:
     TerminalSheetName = sys.argv[1]
     if not os.path.exists(TerminalSheetName):
-        TerminalSheetName = "Finvasia_Trade_Terminal_v3.xlsm"
-except Exception as e:
-    TerminalSheetName = "Finvasia_Trade_Terminal_v3.xlsm"
-    pass
+        TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Finvasia_Trade_Terminal_v3.xlsm")
+except Exception:
+    TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Finvasia_Trade_Terminal_v3.xlsm")
 
 
 def Text2Speech(Text):
@@ -528,6 +527,10 @@ def start_Trade_Terminal():
                                 live_data[TokenKey].get("lp", "-"),
                                 live_data[TokenKey].get("pc", "-"),
                             ]
+                            indicator_row = indicator_engine.update(
+                                api, exchange, tradingsymbol,
+                                convert_to_float(live_data[TokenKey].get("lp", 0))
+                            )
 
                             try:
                                 trade_info = trading_info[idx]
