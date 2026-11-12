@@ -742,6 +742,10 @@ def start_Trade_Terminal():
     tt.range('k1').color = (46,132,198)  
     Trade_Mode = "REAL"
     tt.range("S2").value = "REAL"
+    try:
+        excel_TT.save()
+    except Exception as save_error:
+        print(f"LIVE_TRADE layout is active but workbook save failed: {save_error}")
     
     AlertMessage = Trade_Mode + " trade mode enabled"
     Telegram_Message.append(AlertMessage)
