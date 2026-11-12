@@ -4,6 +4,7 @@ xlwings
 pyttsx3
 pandas
 numpy
+scipy
 websocket-client
 NorenRestApiOAuth
 NorenRestApiPy
