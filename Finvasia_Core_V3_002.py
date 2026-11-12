@@ -476,7 +476,7 @@ def order_status(orderid):
         print(Message)
     return status, AverageExecutedPrice
 
-def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
+def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, row_product_type = None):
     global api, BROKER_LOGIN_OK, SYSTEM_INTERNET_OK, SYSTEM_EXCEL_OK, feed_opened
     if not BROKER_LOGIN_OK:
         print("Live order blocked: Shoonya login is not active.")
@@ -556,14 +556,13 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None):
                 price = float( "{:.1f}".format(result) )
         
         
-    if(Product_type == 'MIS'):
-            product = "I"
-    else:
-    
-        if exchange in ["NSE","BSE"]:
-            product = "C"
-        else:
-            product = "M"
+    selected_product_type = row_product_type if row_product_type is not None and str(row_product_type).strip() else Product_type
+    selected_product_type = str(selected_product_type or "").strip().upper()
+    product_map = {"CNC": "C", "MIS": "I", "NRML": "M", "NORMAL": "M"}
+    if selected_product_type not in product_map:
+        print(f"Live order blocked for {tradingsymbol}: select CNC, MIS or NRML in that symbol's Order Type cell.")
+        return None
+    product = product_map[selected_product_type]
     Message = "Order Details : buy_or_sell = " + str(buy_or_sell[0]) + ", product_type = " + str(product)+ ", exchange = " + str(exchange)+ ", tradingsymbol = " + str(tradingsymbol)+ ", quantity = " + str(quantity)+ ", price_type = " + str(price_type)+ ", price = " + str(price)+ ", trigger_price = " + str(trigger_price)
     logger.info(Message)
     
@@ -746,6 +745,9 @@ def start_Trade_Terminal():
         except Exception as migration_error:
             raise RuntimeError(f"LIVE_TRADE column migration failed: {migration_error}")
 
+    # Insert per-symbol Order Type once and preserve the existing indicator values.
+    if str(tt.range("AE3").value or "").strip().upper() != "ORDER TYPE":
+        tt.range("AE3:AL1000").copy(destination=tt.range("AF3:AM1000"))
     tt.range("a2:d2").value  = 0
     tt.range("r4:t1000").value  = None
     tt.range("v4:x1000").value  = None
@@ -754,17 +756,34 @@ def start_Trade_Terminal():
         "Symbol", "Open", "High", "Low", "Close", "VWAP", "Best Buy Price",
         "Best Sell Price", "Volume", "OI", "LTP", "Percentage change",
         "Qty", "BUY Trigger", "SELL Trigger", "Entry Signal", "Entry Limit Price",
-        "Entry Done @", "Entry Order ID", "Entry Remarks", "Exit Signal",
-        "Exit Done @", "Exit Order ID", "Exit Remarks", "Target", "SL",
+        "Entry Done @", "Entry Order ID", "", "Exit Signal",
+        "Exit Done @", "Exit Order ID", "", "Target", "SL",
         "Trail Enable", "Latest SL", "Trade Status", "PnL"
     ]
+    tt.range("AE3").value = "Order Type"
+    try:
+        tt.range("AE4:AE1000").api.Validation.Delete()
+    except Exception:
+        pass
+    try:
+        tt.range("AE4:AE1000").api.Validation.Add(Type=3, AlertStyle=1, Operator=1, Formula1="CNC,MIS,NRML")
+        tt.range("AE4:AE1000").api.Validation.IgnoreBlank = True
+        tt.range("AE4:AE1000").api.Validation.InCellDropdown = True
+    except Exception as validation_error:
+        print(f"Order Type dropdown could not be applied: {validation_error}")
+    # Keep broker diagnostics internally, but remove the remarks columns from view.
+    try:
+        tt.range("T:T").api.EntireColumn.Hidden = True
+        tt.range("X:X").api.EntireColumn.Hidden = True
+    except Exception as hide_error:
+        print(f"Remarks columns could not be hidden: {hide_error}")
     # Remove the former BUY/SELL dropdown; N and O are independent trigger inputs.
     for trigger_range in ("N4:N1000", "O4:O1000"):
         try:
             tt.range(trigger_range).api.Validation.Delete()
         except Exception:
             pass
-    tt.range("AE3:AL3").value = ["RSI", "StochRSI", "SMA Stoch", "BB Upper", "BB Middle", "BB Lower", "BUY Signal", "SELL Signal"]
+    tt.range("AF3:AM3").value = ["RSI", "StochRSI", "SMA Stoch", "BB Upper", "BB Middle", "BB Lower", "BUY Signal", "SELL Signal"]
                                 
     tt.range('k1').value =  'PYTHON TRADER'
     tt.range('k1').color = (46,132,198)  
@@ -811,7 +830,7 @@ def start_Trade_Terminal():
         try:
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
-            trading_info = tt.range(f"m{4}:ad{1000}").value
+            trading_info = tt.range(f"m{4}:ae{1000}").value
             main_list = []
             indicator_list = []
 
@@ -875,7 +894,7 @@ def start_Trade_Terminal():
                                                             #Entry buy trade immediately
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18])
                                                             
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
@@ -895,7 +914,7 @@ def start_Trade_Terminal():
                                                             #Entry buy trade immediately at ltp price
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
@@ -917,7 +936,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[4])
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[4], trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
@@ -940,7 +959,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[4])
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[4], trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
@@ -1002,7 +1021,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
@@ -1016,7 +1035,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
@@ -1030,7 +1049,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", target meets so exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18])
                                                             
                                                             LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
@@ -1042,7 +1061,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", TSL meets so exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18])
                                                             
                                                             LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                             
@@ -1083,7 +1102,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
@@ -1105,7 +1124,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
@@ -1126,7 +1145,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[4])
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[4], trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
                                                             else:
@@ -1147,7 +1166,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[4])
+                                                            order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[4], trade_info[18])
                                                             
                                                             if order_id is None:
                                                                 tt.range(f"AC{idx_location + 2}").value = "Order_Rejected/Unconfirmed"
@@ -1210,7 +1229,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18])
                                                             if order_id is None:
                                                                 tt.range(f"U{idx_location + 2}").value = None
                                                             else:  
@@ -1224,7 +1243,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18])
                                                             
                                                             if order_id is None:
                                                                 tt.range(f"U{idx_location + 2}").value = None
@@ -1239,7 +1258,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", target meets so exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18])
                                                             
                                                             LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                             
@@ -1252,7 +1271,7 @@ def start_Trade_Terminal():
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", TSL meets so exit triggered"
                                                             logger.info(Message)
                                                             
-                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP)
+                                                            order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18])
                                                             
                                                             if order_id is None:
                                                                 tt.range(f"U{idx_location + 2}").value = None
@@ -1296,7 +1315,7 @@ def start_Trade_Terminal():
                 idx += 1
 
             tt.range("b4:l1000").value = main_list
-            tt.range("AE4:AL1000").value = indicator_list
+            tt.range("AF4:AM1000").value = indicator_list
                 
         except Exception as e:
             #print(f"Exception : {str(e)}")
