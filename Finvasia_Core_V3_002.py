@@ -658,6 +658,15 @@ def subscribe_new_token(exchange, Token):
     api.subscribe(symbol)
 
 LimitOrderBook = {}
+def _is_terminal_trigger(value, side):
+    """Accept an explicit BUY/SELL command or a truthy Excel trigger value."""
+    if value is None:
+        return False
+    return str(value).strip().upper() in (side, "TRUE", "1", "YES", "ON")
+
+
+)
+
 def get_live_trade_sheet(workbook):
     """Return LIVE_TRADE, migrating the previous Trade_Terminal tab name."""
     try:
@@ -810,11 +819,11 @@ def start_Trade_Terminal():
                                                             else:    
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                             
@@ -828,11 +837,11 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                             
@@ -849,11 +858,11 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                            
@@ -871,11 +880,11 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                             
@@ -885,8 +894,8 @@ def start_Trade_Terminal():
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
-                                                            tt.range(f"q{idx_location + 2}").value = Executed_price
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Active'
+                                                            tt.range(f"R{idx_location + 2}").value = Executed_price
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Active'
                                                         
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Bought at " + str(Executed_price)
                                                             
@@ -932,8 +941,8 @@ def start_Trade_Terminal():
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"v{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
+                                                                tt.range(f"W{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'
                                                                 
                                                         elif trade_info[8] == 'True_Limit_LTP':
                                                             #exit buy at ltp limit 
@@ -946,8 +955,8 @@ def start_Trade_Terminal():
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"v{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
+                                                                tt.range(f"W{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'
                                                             
                                                         elif type(trade_info[12]) is float and trade_info[12] <= LTP:
                                                             #target meets, so exit the buy order
@@ -958,8 +967,8 @@ def start_Trade_Terminal():
                                                             
                                                             LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                            tt.range(f"v{idx_location + 2}").value = order_id
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
+                                                            tt.range(f"W{idx_location + 2}").value = order_id
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'
                                                         
                                                         elif TSL >= LTP and type(trade_info[13]) is float:
                                                             #sl meets, so exiting the buy order
@@ -970,8 +979,8 @@ def start_Trade_Terminal():
                                                             
                                                             LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                             
-                                                            tt.range(f"v{idx_location + 2}").value = order_id
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
+                                                            tt.range(f"W{idx_location + 2}").value = order_id
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'
                                                             
                                                     
                                                     elif trade_info[16] ==  'Exit_Pending':
@@ -980,8 +989,8 @@ def start_Trade_Terminal():
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
-                                                            tt.range(f"u{idx_location + 2}").value = Executed_price
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Closed'
+                                                            tt.range(f"V{idx_location + 2}").value = Executed_price
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Closed'
                                                             
                                                             PnL = (float(Executed_price) - float(trade_info[5])) * int(trade_info[0])
                                                             tt.range(f"AD{idx_location + 2}").value = PnL
@@ -1013,12 +1022,12 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                             
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                                 #print("b")
                                                             
@@ -1034,11 +1043,11 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                                 
@@ -1054,11 +1063,11 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                             
@@ -1075,11 +1084,11 @@ def start_Trade_Terminal():
                                                             else: 
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"q{idx_location + 2}").value = None
-                                                                tt.range(f"r{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Entry_Pending'
-                                                                tt.range(f"u{idx_location + 2}").value = None
-                                                                tt.range(f"v{idx_location + 2}").value = None
+                                                                tt.range(f"R{idx_location + 2}").value = None
+                                                                tt.range(f"S{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Entry_Pending'
+                                                                tt.range(f"V{idx_location + 2}").value = None
+                                                                tt.range(f"W{idx_location + 2}").value = None
                                                                 tt.range(f"AB{idx_location + 2}").value = None
                                                                 tt.range(f"AD{idx_location + 2}").value = None
                                                             
@@ -1090,8 +1099,8 @@ def start_Trade_Terminal():
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
-                                                            tt.range(f"q{idx_location + 2}").value = Executed_price
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Active'
+                                                            tt.range(f"R{idx_location + 2}").value = Executed_price
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Active'
                                                             
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Sold at " + str(Executed_price) 
                                                             
@@ -1136,8 +1145,8 @@ def start_Trade_Terminal():
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                     
-                                                                tt.range(f"v{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = "Exit_Pending"
+                                                                tt.range(f"W{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = "Exit_Pending"
                                                                 
                                                         elif trade_info[8] == 'True_Limit_LTP':
                                                             #exit SELL at ltp limit 
@@ -1151,8 +1160,8 @@ def start_Trade_Terminal():
                                                             else:  
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
-                                                                tt.range(f"v{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'    
+                                                                tt.range(f"W{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'    
                                                                 
                                                         elif type(trade_info[12]) is float and trade_info[12] >= LTP:
                                                             #target meets, so exiting the sell order
@@ -1163,8 +1172,8 @@ def start_Trade_Terminal():
                                                             
                                                             LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                             
-                                                            tt.range(f"v{idx_location + 2}").value = order_id
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
+                                                            tt.range(f"W{idx_location + 2}").value = order_id
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'
                                                             
                                                         
                                                         elif TSL <= LTP and type(trade_info[13]) is float:
@@ -1181,8 +1190,8 @@ def start_Trade_Terminal():
                                                                 LimitOrderBook.update({str(order_id): {'status': 'PENDING', 'Remarks': None, 'Executed_price': None}})
                                                                 
                                                                 
-                                                                tt.range(f"v{idx_location + 2}").value = order_id
-                                                                tt.range(f"Ab{idx_location + 2}").value = 'Exit_Pending'
+                                                                tt.range(f"W{idx_location + 2}").value = order_id
+                                                                tt.range(f"AC{idx_location + 2}").value = 'Exit_Pending'
                                                             
                                                     elif trade_info[16] ==  'Exit_Pending':
                                                         Order_id = str(int(trade_info[10]))
@@ -1190,8 +1199,8 @@ def start_Trade_Terminal():
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
-                                                            tt.range(f"u{idx_location + 2}").value = Executed_price
-                                                            tt.range(f"Ab{idx_location + 2}").value = 'Closed'
+                                                            tt.range(f"V{idx_location + 2}").value = Executed_price
+                                                            tt.range(f"AC{idx_location + 2}").value = 'Closed'
                                                             
                                                             PnL = (float(trade_info[5]) - float(Executed_price)) * int(trade_info[0])
                                                             tt.range(f"AD{idx_location + 2}").value = PnL
@@ -3078,11 +3087,4 @@ if Shoonya_login() == 1:
 else:
     BROKER_LOGIN_OK = False
     Text2Speech("Warning. Shoonya login failed. No live trading will start.")
-    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection."def _is_terminal_trigger(value, side):
-    """Accept an explicit BUY/SELL command or a truthy Excel trigger value."""
-    if value is None:
-        return False
-    return str(value).strip().upper() in (side, "TRUE", "1", "YES", "ON")
-
-
-)
+    print("Shoonya login failed. Please check LOGIN credentials, API activation and internet connection."
