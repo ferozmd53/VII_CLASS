@@ -157,6 +157,17 @@ def ensure_excel_com_initialized():
         pass
 
 
+
+def is_excel_busy_error(error):
+    """Return True for transient Excel/OLE automation-busy errors."""
+    message = str(error).lower()
+    return any(code in message for code in (
+        "0x800ac472", "-2146777998",
+        "0x80010001", "-2147418111",
+        "0x8001010a", "-2147417846",
+    ))
+
+
 def is_excel_connection_lost():
     """Connection state belongs to the calling worker thread."""
     return bool(getattr(_excel_com_state, "connection_lost", False))
@@ -228,8 +239,29 @@ def get_terminal_workbook():
                 running_apps = []
 
             if running_apps:
-                # Open the workbook inside an existing Excel process. xw.Book(path)
-                # may create another Excel instance when COM ROT lookup fails.
+                # Recheck inside the lock: another worker may already have
+                # reopened the workbook while this worker was waiting.
+                for app in running_apps:
+                    try:
+                        for book in app.books:
+                            try:
+                                book_path = os.path.normcase(os.path.abspath(book.fullname))
+                                if book_path != target_path:
+                                    continue
+                                _ = book.sheets[0].name
+                                _excel_com_state.workbook = book
+                                _excel_com_state.connection_lost = False
+                                _excel_com_state.disconnect_reported = False
+                                _excel_com_state.reconnect_error_reported = False
+                                print("Excel workbook connection restored for this worker.")
+                                return book
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+
+                # Only open when the workbook is genuinely absent from all
+                # running Excel instances. This prevents duplicate workbook tabs.
                 for app in running_apps:
                     try:
                         workbook = app.books.open(TerminalSheetName)
@@ -385,7 +417,7 @@ def get_login_settings_sheet(workbook):
     return login_sheet
 
 
-def Shoonya_login():
+def _shoonya_login_once():
     global api, TelegramBotCredential, ReceiverTelegramID, BROKER_LOGIN_OK
     BROKER_LOGIN_OK = False
     global logger, userid, client_name
@@ -444,6 +476,10 @@ def Shoonya_login():
         return isConnected
 
     except Exception as exc:
+        # Excel may briefly reject COM calls while recalculating, saving, or
+        # recovering after a forced close. Let the outer login retry handle it.
+        if is_excel_busy_error(exc):
+            raise
         print(f"Shoonya OAuth login error: {exc}")
         Text2Speech("Warning. Shoonya login failed. No live trading will start.")
         try:
@@ -452,6 +488,34 @@ def Shoonya_login():
         except Exception:
             pass
         return 0
+
+
+def Shoonya_login():
+    """Retry transient Excel/OLE busy errors without requesting new credentials."""
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = _shoonya_login_once()
+            return result
+        except Exception as exc:
+            if not is_excel_busy_error(exc):
+                print(f"Shoonya login could not recover from Excel error: {exc}")
+                return 0
+            if attempt >= max_attempts:
+                print(
+                    "Excel remained busy after "
+                    f"{max_attempts} login attempts ({exc}). "
+                    "Close Excel dialogs, wait for Excel to respond, then restart run.py."
+                )
+                return 0
+            wait_seconds = min(2 * attempt, 8)
+            print(
+                f"Excel is temporarily busy during Shoonya login "
+                f"(attempt {attempt}/{max_attempts}). Retrying in {wait_seconds} seconds..."
+            )
+            sleep(wait_seconds)
+
+
 
 
 feed_opened = False
