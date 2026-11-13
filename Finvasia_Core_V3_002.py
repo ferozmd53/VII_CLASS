@@ -615,6 +615,10 @@ def Shoonya_login():
 feed_opened = False
 SYMBOLDICT = {}
 live_data = {}
+# Keep every token subscribed during this API session so a re-opened
+# Shoonya WebSocket can restore the complete feed, including option strikes.
+SOCKET_SUBSCRIPTIONS = set()
+SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 indicator_engine = IndicatorEngine()
 
 Telegram_Message = ["Welcome to Python Trader excel based trade terminal","Have a Good Day"]
@@ -716,14 +720,56 @@ def event_handler_order_update(tick_data):
     except Exception as exc:
         print(f"Could not apply broker order update: {exc}")
 
+def _resubscribe_registered_tokens():
+    """Restore all previously requested quote tokens after WebSocket reconnect."""
+    if not feed_opened:
+        return
+    with SOCKET_SUBSCRIPTIONS_LOCK:
+        tokens = sorted(SOCKET_SUBSCRIPTIONS)
+    if not tokens:
+        print("WebSocket reconnected; no previous quote subscriptions to restore.")
+        return
+
+    restored = 0
+    failed = 0
+    for token_key in tokens:
+        if not feed_opened:
+            break
+        try:
+            api.subscribe([token_key])
+            restored += 1
+            sleep(0.02)
+        except Exception as exc:
+            failed += 1
+            print(f"WebSocket resubscribe failed for {token_key}: {exc}")
+            sleep(0.10)
+    print(
+        f"WebSocket resubscription finished: {restored}/{len(tokens)} "
+        f"tokens restored; {failed} failed."
+    )
+
+
 def open_callback():
     global feed_opened
+    was_open = feed_opened
     feed_opened = True
-    
-    #add below lines if issue facing while websocket distruption
-    global subs_lst
-    subs_lst = []
-    
+    if was_open:
+        return
+
+    # Old quotes must not be used to place orders while the new socket is
+    # still restoring subscriptions. Fresh quote callbacks repopulate them.
+    with LIVE_DATA_LOCK:
+        live_data.clear()
+        SYMBOLDICT.clear()
+
+    print("Shoonya WebSocket connected/reconnected; restoring saved subscriptions...")
+    Thread(
+        target=_resubscribe_registered_tokens,
+        daemon=True,
+        name="ShoonyaResubscribe"
+    ).start()
+
+
 def event_handler_socket_closed():
     global feed_opened
     feed_opened = False
@@ -968,10 +1014,21 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
     return Token
 
 def subscribe_new_token(exchange, Token):
+    """Subscribe once and retain the token for automatic WebSocket recovery."""
     global api
-    symbol = []
-    symbol.append(f"{exchange}|{Token}")
-    api.subscribe(symbol)
+    token_key = f"{exchange}|{Token}"
+    with SOCKET_SUBSCRIPTIONS_LOCK:
+        already_registered = token_key in SOCKET_SUBSCRIPTIONS
+        SOCKET_SUBSCRIPTIONS.add(token_key)
+    try:
+        # A repeated request is still sent when the socket is newly open;
+        # the broker accepts the token subscription idempotently.
+        api.subscribe([token_key])
+    except Exception:
+        if not already_registered:
+            with SOCKET_SUBSCRIPTIONS_LOCK:
+                SOCKET_SUBSCRIPTIONS.discard(token_key)
+        raise
 
 LimitOrderBook = {}
 
@@ -1098,6 +1155,19 @@ def _is_terminal_trigger(value, side):
 
 
 
+def _required_positive_number(value, field_name):
+    """Parse a required positive order input without ever calling float(None)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise ValueError(f"{field_name} is blank")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field_name} must be a number")
+    if not np.isfinite(number) or number <= 0:
+        raise ValueError(f"{field_name} must be greater than zero")
+    return number
+
+
 def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
                                   market_type, limit_price, ltp):
     """Submit one side order on a worker thread; never block the quote refresh loop."""
@@ -1114,22 +1184,27 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
         id_col, status_col = ("R", "S") if side == "BUY" else ("X", "Y")
         sheet.range(f"{status_col}{row_number}").value = "SUBMITTING"
 
-        quantity = int(float(qty))
-        if quantity <= 0:
-            raise ValueError("Quantity must be greater than zero")
+        quantity_value = _required_positive_number(qty, "Quantity")
+        if not quantity_value.is_integer():
+            raise ValueError("Quantity must be a whole number")
+        quantity = int(quantity_value)
+
+        product_type = str(product_type or "").strip().upper()
+        if product_type not in ("MIS", "CNC", "NRML"):
+            raise ValueError("Select a valid Product Type: MIS, CNC or NRML")
 
         market_type = str(market_type or "").strip().upper()
         if market_type == "MARKET":
-            broker_order_type, order_price = "LIMIT", float(ltp)
+            broker_order_type = "LIMIT"
+            order_price = _required_positive_number(ltp, "Live LTP")
         elif market_type == "LIMIT":
-            broker_order_type, order_price = "LIMIT", float(limit_price)
+            broker_order_type = "LIMIT"
+            order_price = _required_positive_number(limit_price, "Limit Price")
         elif market_type == "SL-LMT":
-            broker_order_type, order_price = "SL-M", float(limit_price)
+            broker_order_type = "SL-M"
+            order_price = _required_positive_number(limit_price, "Trigger Price")
         else:
-            raise ValueError("Select MARKET, LIMIT or SL-LMT")
-
-        if not np.isfinite(order_price) or order_price <= 0:
-            raise ValueError("A valid live LTP/limit/trigger price is required")
+            raise ValueError("Select MARKET, LIMIT or SL-LMT in the BUY/SELL type cell")
 
         order_id = place_trade(
             symbol, quantity, side, broker_order_type, order_price,
@@ -1175,6 +1250,28 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
     if not _is_terminal_trigger(trigger, side):
         with SIDE_TRIGGER_STATE_LOCK:
             SIDE_TRIGGER_STATE[key] = {"armed": False}
+        return
+
+    # Users may enter BUY/SELL before completing the other cells. Do not latch
+    # or submit an incomplete command; keep checking until every required
+    # input (and a fresh LTP for MARKET) is available.
+    try:
+        _required_positive_number(qty, "Quantity")
+        if str(product_type or "").strip().upper() not in ("MIS", "CNC", "NRML"):
+            raise ValueError("Select Product Type: MIS, CNC or NRML")
+        selected_market_type = str(market_type or "").strip().upper()
+        if selected_market_type == "MARKET":
+            _required_positive_number(ltp, "Live LTP (waiting for fresh quote)")
+        elif selected_market_type == "LIMIT":
+            _required_positive_number(limit_price, "Limit Price")
+        elif selected_market_type == "SL-LMT":
+            _required_positive_number(limit_price, "Trigger Price")
+        else:
+            raise ValueError("Select MARKET, LIMIT or SL-LMT")
+    except ValueError as input_error:
+        waiting_message = "WAITING: " + str(input_error)
+        if str(sheet.range(f"{status_col}{row_number}").value or "") != waiting_message:
+            sheet.range(f"{status_col}{row_number}").value = waiting_message
         return
 
     with SIDE_TRIGGER_STATE_LOCK:
