@@ -2,14 +2,6 @@
 """
 Created on Fri Oct 14 09:13:23 2022
 
-This tool is to fetch two option chain (of any segment/symbol) data and trade terminal sheet, where all input comes using web socket data which leads to low lag and no api restriction. 
-
-Contact details :
-Telegram Channel:  https://t.me/pythontrader
-Developer Telegram ID : https://t.me/pythontrader_admin
-Gmail ID:   mnkumar2020@gmail.com 
-Whatsapp : 9470669031 
-Youtube : youtube.com/@pythontraders
 
 Disclaimer: The information provided by the Python Traders channel is for educational purposes only, so please contact your financial adviser before placing your trade. Developer is not responsible for any profit/loss happened due to coding, logical or any type of error.
 
