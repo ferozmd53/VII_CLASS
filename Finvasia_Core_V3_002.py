@@ -694,61 +694,51 @@ def SendMessageToTelegram(Message):
         #print(f"SendMessageToTelegram exception occur : {e}")
         pass
 
-def event_handler_quote_update(inmessage):
-    global live_data
+def _has_valid_live_ltp(quote):
+    """A subscription is live only after a real, positive LTP is present."""
+    if not isinstance(quote, dict):
+        return False
+    try:
+        ltp = float(str(quote.get("lp", "")).replace(",", "").strip())
+        return bool(np.isfinite(ltp) and ltp > 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
 
-    global SYMBOLDICT
-    # e   Exchange
-    # tk  Token
-    # lp  LTP
-    # pc  Percentage change
-    # v   volume
-    # o   Open price
-    # h   High price
-    # l   Low price
-    # c   Close price
-    # ap  Average trade price
-    # oi  Open interest
+
+def event_handler_quote_update(inmessage):
+    global live_data, SYMBOLDICT
+
+    # Shoonya SDK versions may pass either a dict or a JSON-encoded message.
+    if isinstance(inmessage, str):
+        try:
+            inmessage = json.loads(inmessage)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return
+    if not isinstance(inmessage, dict):
+        return
 
     fields = [
-        "ts",
-        "lp",
-        "pc",
-        "c",
-        "o",
-        "h",
-        "l",
-        "v",
-        "ltq",
-        "ltp",
-        "bp1",
-        "sp1",
-        "bq1",
-        "sq1",
-        "ap",
-        "oi",
-        "ap",
-        "poi",
-        "toi",
+        "ts", "lp", "pc", "c", "o", "h", "l", "v", "ltq", "ltp",
+        "bp1", "sp1", "bq1", "sq1", "ap", "oi", "poi", "toi",
     ]
+    message = {field: inmessage[field] for field in fields if field in inmessage}
 
-    message = {field: inmessage[field] for field in set(fields) & set(inmessage.keys())}
-    # print(message)
     exchange = str(inmessage.get("e") or "").strip().upper()
     token = str(inmessage.get("tk") or "").strip()
     if not exchange or not token:
         return
     key = exchange + "|" + token
 
-    # The subscribe() call is asynchronous. Record the first server callback
-    # for each newly requested token so "sent" is not confused with "accepted".
-    with SUBSCRIPTION_DIAGNOSTIC_LOCK:
-        if key in SUBSCRIPTION_DIAGNOSTIC_TOKENS and key not in SUBSCRIPTION_CALLBACK_LOGGED:
-            SUBSCRIPTION_CALLBACK_LOGGED.add(key)
-            print(f"SHOONYA FEED CALLBACK for {key}: {inmessage}")
+    # A token callback without a usable LTP is not proof that market data arrived.
+    valid_quote_tick = _has_valid_live_ltp(message)
+    if valid_quote_tick:
+        with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+            if key in SUBSCRIPTION_DIAGNOSTIC_TOKENS and key not in SUBSCRIPTION_CALLBACK_LOGGED:
+                SUBSCRIPTION_CALLBACK_LOGGED.add(key)
+                print(f"SHOONYA FIRST VALID LTP for {key}: lp={message.get('lp')}")
 
     # Keep quote ingestion short and independent from Excel/order workers.
-    # Replace the snapshot atomically so readers never see a half-updated OHLC tick.
+    # Merge partial quote fields, but never manufacture an LTP when it is absent.
     with LIVE_DATA_LOCK:
         symbol_info = dict(SYMBOLDICT.get(key, {}))
         symbol_info.update(message)
@@ -1229,9 +1219,13 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
         for attempt in range(5):
             sleep(3.0)
             with LIVE_DATA_LOCK:
-                if live_data.get(token_key):
-                    print(f"First WebSocket tick received for {symbol} ({token_key}).")
-                    return
+                quote_snapshot = dict(live_data.get(token_key, {}))
+            if _has_valid_live_ltp(quote_snapshot):
+                print(
+                    f"First valid WebSocket LTP received for {symbol} "
+                    f"({token_key}): {quote_snapshot.get('lp')}"
+                )
+                return
 
             if not feed_opened:
                 print(f"Waiting for WebSocket reconnection to receive {symbol} ({token_key}).")
@@ -1248,7 +1242,7 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
                     print(f"Subscription retry failed for {symbol} ({token_key}): {exc}")
 
         with LIVE_DATA_LOCK:
-            received = bool(live_data.get(token_key))
+            received = _has_valid_live_ltp(dict(live_data.get(token_key, {})))
         if not received:
             # Read-only REST probe: confirms whether this exact exchange/token
             # resolves to the requested symbol. Never writes REST data to live_data.
@@ -1739,6 +1733,9 @@ def start_Trade_Terminal():
     last_excel_reconnect_generation = EXCEL_RECONNECT_GENERATION
     from concurrent.futures import ThreadPoolExecutor
     subscription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="SymbolSubscribe")
+    # Bound watchdog concurrency: do not create one operating-system thread
+    # for every row when a large symbol list is pasted into Excel.
+    feed_watchdog_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="FeedWatchdog")
 
     def subscribe_symbol_in_background(symbol):
         try:
@@ -1772,12 +1769,9 @@ def start_Trade_Terminal():
                     force_resubscribe_symbols.discard(symbol)
                 terminal_subscribed.add(symbol)
             print(f"Symbol = {symbol}, Token={token} subscription sent; waiting for first WebSocket tick")
-            Thread(
-                target=_watch_new_symbol_subscription,
-                args=(symbol, exchange, token),
-                daemon=True,
-                name=f"SymbolFeedCheck-{tradingsymbol}"
-            ).start()
+            feed_watchdog_executor.submit(
+                _watch_new_symbol_subscription, symbol, exchange, token
+            )
         except Exception as exc:
             print(f"Subscribe error {symbol}: {exc}")
             with subscription_lock:
