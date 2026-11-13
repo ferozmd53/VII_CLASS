@@ -139,11 +139,8 @@ try:
 except Exception:
     TerminalSheetName = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VII_CLASS.xlsm")
 
-# Reuse one workbook handle. Searching running Excel instances avoids the
-# ambiguous xw.Book(path) error when the same file is open more than once.
-excel_workbook = None
-excel_workbook_lock = Lock()
-excel_connection_lost = False
+# Excel COM proxies are apartment/thread-affine. Never share an xlwings
+# Book/Sheet proxy between Python threads: each worker must bind its own proxy.
 _excel_com_state = local()
 
 
@@ -156,66 +153,75 @@ def ensure_excel_com_initialized():
         pythoncom.CoInitialize()
         _excel_com_state.initialized = True
     except Exception:
-        # xlwings may still initialize COM itself; the next workbook call
-        # will report a clear connection error if COM is unavailable.
         pass
 
 
-def get_terminal_workbook():
-    """Return the open workbook, and reconnect after Excel is reopened.
+def is_excel_connection_lost():
+    """Connection state belongs to the calling worker thread."""
+    return bool(getattr(_excel_com_state, "connection_lost", False))
 
-    Once an Excel disconnect is detected, do not launch a replacement copy
-    automatically. Wait for the user to reopen VII_CLASS.xlsm, then bind to
-    that running workbook instance.
+
+def get_terminal_workbook():
+    """Get a thread-local workbook proxy attached to the already-open workbook.
+
+    xlwings COM objects must not be passed between worker threads. Cache one
+    workbook proxy per thread, validate it in that same COM apartment, and
+    only report reconnection after this thread has actually recovered.
     """
-    global excel_workbook, excel_connection_lost
     ensure_excel_com_initialized()
     target_path = os.path.normcase(os.path.abspath(TerminalSheetName))
+    workbook = getattr(_excel_com_state, "workbook", None)
 
-    with excel_workbook_lock:
-        if excel_workbook is not None:
-            try:
-                if os.path.normcase(os.path.abspath(excel_workbook.fullname)) == target_path:
-                    _ = excel_workbook.sheets[0].name
-                    return excel_workbook
-            except Exception:
-                excel_workbook = None
-                excel_connection_lost = True
-                print("Excel COM connection lost. Waiting to reconnect to the reopened workbook...")
-
-        matches = []
+    if workbook is not None:
         try:
-            for app in xw.apps:
+            current_path = os.path.normcase(os.path.abspath(workbook.fullname))
+            if current_path == target_path:
+                _ = workbook.sheets[0].name
+                return workbook
+        except Exception:
+            _excel_com_state.workbook = None
+            _excel_com_state.connection_lost = True
+            if not getattr(_excel_com_state, "disconnect_reported", False):
+                print("Excel COM connection lost in this worker. Waiting for a valid workbook connection...")
+                _excel_com_state.disconnect_reported = True
+
+    matches = []
+    try:
+        for app in xw.apps:
+            try:
                 for book in app.books:
                     try:
                         book_path = os.path.normcase(os.path.abspath(book.fullname))
-                        if book_path == target_path:
-                            matches.append(book)
+                        if book_path != target_path:
+                            continue
+                        # Validate the candidate in this worker before caching it.
+                        _ = book.sheets[0].name
+                        matches.append(book)
                     except Exception:
                         continue
-        except Exception:
-            pass
+            except Exception:
+                continue
+    except Exception:
+        pass
 
-        if matches:
-            if len(matches) > 1:
-                print(
-                    "WARNING: Terminal workbook is open in "
-                    f"{len(matches)} Excel instances. Reusing the first "
-                    "existing instance without opening another copy."
-                )
-            excel_workbook = matches[0]
-            excel_connection_lost = False
-            print("Reconnected to the reopened VII_CLASS.xlsm workbook.")
-            return excel_workbook
+    if matches:
+        workbook = matches[0]
+        was_disconnected = bool(getattr(_excel_com_state, "connection_lost", False))
+        _excel_com_state.workbook = workbook
+        _excel_com_state.connection_lost = False
+        _excel_com_state.disconnect_reported = False
+        if was_disconnected:
+            print("Excel workbook connection restored for this worker.")
+        return workbook
 
-        if excel_connection_lost:
-            raise RuntimeError(
-                "Excel is disconnected. Reopen VII_CLASS.xlsm manually; "
-                "Python will reconnect when the workbook is available."
-            )
-
-        excel_workbook = xw.Book(TerminalSheetName)
-        return excel_workbook
+    # Never launch a second Excel instance after a disconnect. Attach only
+    # after the user has opened VII_CLASS.xlsm again.
+    _excel_com_state.workbook = None
+    _excel_com_state.connection_lost = True
+    if not getattr(_excel_com_state, "disconnect_reported", False):
+        print("VII_CLASS.xlsm is not currently accessible. Waiting for it to be opened...")
+        _excel_com_state.disconnect_reported = True
+    raise RuntimeError("VII_CLASS.xlsm is not available in this worker's Excel session.")
 
 
 def Text2Speech(Text):
@@ -1205,11 +1211,11 @@ def start_Trade_Terminal():
                         market_rows.append(values)
                     market_sheet.range("B4:L1000").value = market_rows
                 except Exception as market_error:
-                    if not excel_connection_lost:
+                    if not is_excel_connection_lost():
                         print(f"Live market-data refresh error (order workers continue): {market_error}")
                     # Avoid flooding the console while Excel is closed; retry
                     # slowly until the user reopens the workbook.
-                    sleep(1.0 if excel_connection_lost else 0.15)
+                    sleep(1.0 if is_excel_connection_lost() else 0.15)
         except Exception as writer_error:
             print(f"Live market-data writer stopped: {writer_error}")
         finally:
@@ -3474,7 +3480,7 @@ def start_Open_Position():
                                         pass
                                     op_op.range(f"a{4+i}").value = None
         except Exception as e:
-            if not excel_connection_lost:
+            if not is_excel_connection_lost():
                 print(f"Exception occur in OpenPosition : {e}")
             pass
         
@@ -3484,7 +3490,7 @@ def start_Open_Position():
                 if(len(df_holding)> 0 ):
                     op_hold.range("a1").options(index=False,header=True).value = df_holding
         except Exception as e:
-            if not excel_connection_lost:
+            if not is_excel_connection_lost():
                 print(f"Exception occur in Holdings : {e}")
             pass
         
@@ -3511,7 +3517,7 @@ def start_Open_Position():
                                 op_ob.range(f"a{2+i}").value = None
                 
         except Exception as e:
-            if not excel_connection_lost:
+            if not is_excel_connection_lost():
                 print(f"Exception occur in OrderBook : {e}")
             pass
         
