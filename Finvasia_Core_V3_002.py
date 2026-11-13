@@ -1022,31 +1022,86 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     return str(order_id)
 
 def get_order_book():
-    try:
-        global api
-        order_book = api.get_order_book()
-        df_order_book = pd.DataFrame(order_book)
-        if(len(df_order_book) > 0):
-            df_order_book = df_order_book.sort_values(by=["norenordno"]).reset_index(drop=True)
-            try:
-                df_order_book = df_order_book[['norenordno' ,'status','exch','tsym','prctyp','trantype','qty','fillshares','prc','avgprc','prd','token','ls','remarks','rejreason','trgprc']]
-                df_order_book = df_order_book.rename(columns={'norenordno' : 'Order No','exch' : 'Exchange','tsym' : 'Trading Symbol','qty' : 'Quantity','trantype' : 'Transaction Type','prctyp' : 'Product Type','trgprc':'Trigger Price','token' : 'Token','ls' : 'Lot Size','status' : 'Status','remarks' : 'Remarks','rejreason' : 'Order rejection reason','prd':'Order Type','avgprc':'Executed Price','fillshares':'Filled Shares','prc':'Price'})
-            except Exception as e:
-                try:
-                    df_order_book = df_order_book[['norenordno' ,'status','exch','tsym','prctyp','trantype','qty','fillshares','prc','avgprc','prd','token','ls','remarks','trgprc']]
-                    df_order_book = df_order_book.rename(columns={'norenordno' : 'Order No','exch' : 'Exchange','tsym' : 'Trading Symbol','qty' : 'Quantity','trantype' : 'Transaction Type','prctyp' : 'Product Type','trgprc':'Trigger Price','token' : 'Token','ls' : 'Lot Size','status' : 'Status','remarks' : 'Remarks','prd':'Order Type','avgprc':'Executed Price','fillshares':'Filled Shares','prc':'Price'})
-                except Exception as e:
-                    try:
-                        df_order_book = df_order_book[['norenordno' ,'status','exch','tsym','prctyp','trantype','qty','prc','prd','token','ls','remarks','avgprc']]
-                        df_order_book = df_order_book.rename(columns={'norenordno' : 'Order No','exch' : 'Exchange','tsym' : 'Trading Symbol','qty' : 'Quantity','trantype' : 'Transaction Type','prctyp' : 'Product Type','token' : 'Token','ls' : 'Lot Size','status' : 'Status','remarks' : 'Remarks','prd':'Order Type','prc':'Price','avgprc':'Executed Price'})
-                    except Exception as e:
-                        df_order_book = df_order_book[['norenordno' ,'status','exch','tsym','prctyp','trantype','qty','prc','prd','token','ls','remarks']]
-                        df_order_book = df_order_book.rename(columns={'norenordno' : 'Order No','exch' : 'Exchange','tsym' : 'Trading Symbol','qty' : 'Quantity','trantype' : 'Transaction Type','prctyp' : 'Product Type','token' : 'Token','ls' : 'Lot Size','status' : 'Status','remarks' : 'Remarks','prd':'Order Type','prc':'Price'})
-        #print(df_order_book)
-    except Exception as e:
-        print(f"Exception occur in get_order_book : {e}")
+    """Return the broker order book in the terminal's standard column layout.
 
-    return df_order_book
+    A REST/API failure must return an empty DataFrame, never an
+    uninitialized local variable. This keeps order-book polling independent
+    from live quote updates and lets the next poll retry normally.
+    """
+    standard_columns = [
+        "Order No", "Status", "Exchange", "Trading Symbol", "Product Type",
+        "Transaction Type", "Quantity", "Filled Shares", "Price",
+        "Executed Price", "Order Type", "Token", "Lot Size", "Remarks",
+        "Order rejection reason", "Trigger Price",
+    ]
+    empty_order_book = pd.DataFrame(columns=standard_columns)
+
+    try:
+        raw_order_book = api.get_order_book()
+        if raw_order_book is None:
+            print("Shoonya get_order_book returned no data; will retry on next poll.")
+            return empty_order_book
+
+        if isinstance(raw_order_book, dict):
+            broker_stat = str(raw_order_book.get("stat", "")).strip().lower()
+            if broker_stat and broker_stat not in ("ok", "success"):
+                print(
+                    "Shoonya get_order_book was rejected: "
+                    f"{raw_order_book.get('emsg') or raw_order_book}"
+                )
+                return empty_order_book
+            if isinstance(raw_order_book.get("values"), list):
+                raw_order_book = raw_order_book["values"]
+            elif raw_order_book.get("norenordno"):
+                raw_order_book = [raw_order_book]
+            else:
+                print(f"Unexpected Shoonya order-book response: {raw_order_book}")
+                return empty_order_book
+
+        df_order_book = pd.DataFrame(raw_order_book)
+        if df_order_book.empty:
+            return empty_order_book
+
+        column_map = {
+            "norenordno": "Order No",
+            "status": "Status",
+            "exch": "Exchange",
+            "tsym": "Trading Symbol",
+            "prctyp": "Product Type",
+            "trantype": "Transaction Type",
+            "qty": "Quantity",
+            "fillshares": "Filled Shares",
+            "prc": "Price",
+            "avgprc": "Executed Price",
+            "prd": "Order Type",
+            "token": "Token",
+            "ls": "Lot Size",
+            "remarks": "Remarks",
+            "rejreason": "Order rejection reason",
+            "trgprc": "Trigger Price",
+        }
+        df_order_book = df_order_book.rename(columns=column_map)
+
+        if "Order No" in df_order_book.columns:
+            df_order_book = df_order_book.sort_values(
+                by="Order No", kind="stable"
+            ).reset_index(drop=True)
+
+        # Keep the familiar terminal columns first while retaining any
+        # additional fields returned by a newer Shoonya SDK.
+        ordered_columns = [
+            column for column in standard_columns
+            if column in df_order_book.columns
+        ]
+        extra_columns = [
+            column for column in df_order_book.columns
+            if column not in ordered_columns
+        ]
+        return df_order_book[ordered_columns + extra_columns]
+
+    except Exception as exc:
+        print(f"Exception occur in get_order_book : {exc}")
+        return empty_order_book
 
 def GetToken_UsingSymbol(exchange, tradingsymbol):
     """Resolve an exact exchange/trading-symbol match; never take searchscrip's first hit blindly."""
