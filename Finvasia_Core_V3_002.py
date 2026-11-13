@@ -1205,8 +1205,11 @@ def start_Trade_Terminal():
                         market_rows.append(values)
                     market_sheet.range("B4:L1000").value = market_rows
                 except Exception as market_error:
-                    print(f"Live market-data refresh error (order workers continue): {market_error}")
-                sleep(0.15)
+                    if not excel_connection_lost:
+                        print(f"Live market-data refresh error (order workers continue): {market_error}")
+                    # Avoid flooding the console while Excel is closed; retry
+                    # slowly until the user reopens the workbook.
+                    sleep(1.0 if excel_connection_lost else 0.15)
         except Exception as writer_error:
             print(f"Live market-data writer stopped: {writer_error}")
         finally:
@@ -3471,7 +3474,8 @@ def start_Open_Position():
                                         pass
                                     op_op.range(f"a{4+i}").value = None
         except Exception as e:
-            print(f"Exception occur in OpenPosition : {e}")
+            if not excel_connection_lost:
+                print(f"Exception occur in OpenPosition : {e}")
             pass
         
         try:
@@ -3480,7 +3484,8 @@ def start_Open_Position():
                 if(len(df_holding)> 0 ):
                     op_hold.range("a1").options(index=False,header=True).value = df_holding
         except Exception as e:
-            print(f"Exception occur in Holdings : {e}")
+            if not excel_connection_lost:
+                print(f"Exception occur in Holdings : {e}")
             pass
         
         try:
@@ -3506,7 +3511,8 @@ def start_Open_Position():
                                 op_ob.range(f"a{2+i}").value = None
                 
         except Exception as e:
-            print(f"Exception occur in OrderBook : {e}")
+            if not excel_connection_lost:
+                print(f"Exception occur in OrderBook : {e}")
             pass
         
         try:
