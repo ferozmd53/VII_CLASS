@@ -1461,7 +1461,7 @@ def get_live_trade_sheet(workbook):
 
 def start_Trade_Terminal():
     #print("I am inside start_Trade_Terminal")
-    global api, live_data
+    global api, live_data, BROKER_LOGIN_OK
     global SYMBOLDICT
     global Product_type
     global Trade_Mode
