@@ -214,11 +214,35 @@ def get_terminal_workbook():
             print("Excel workbook connection restored for this worker.")
         return workbook
 
-    # First-time startup is different from recovery: when this thread has
-    # never connected, use xlwings' documented path lookup. It attaches to the
-    # workbook if already open, or opens it once if it is not open yet.
-    # After a real disconnect, never use xw.Book(path), because that could
-    # launch a second Excel copy; recovery must attach to the reopened workbook.
+    # Recovery: Excel may have been restarted as a new COM server after a
+    # crash. A worker's old COM apartment cannot reuse its dead workbook proxy.
+    # Serialize rebinding attempts so the health monitor and data workers do
+    # not race to open the same file. Only try when an Excel instance is
+    # already running; this avoids starting Excel from a background worker.
+    if getattr(_excel_com_state, "connection_lost", False):
+        with EXCEL_RECONNECT_LOCK:
+            try:
+                running_apps = list(xw.apps)
+            except Exception:
+                running_apps = []
+
+            if running_apps:
+                try:
+                    workbook = xw.Book(TerminalSheetName)
+                    _ = workbook.sheets[0].name
+                    _excel_com_state.workbook = workbook
+                    _excel_com_state.connection_lost = False
+                    _excel_com_state.disconnect_reported = False
+                    print("Excel workbook connection restored for this worker.")
+                    return workbook
+                except Exception as reconnect_error:
+                    _excel_com_state.workbook = None
+                    if not getattr(_excel_com_state, "reconnect_error_reported", False):
+                        print(f"Excel reconnect attempt failed; will retry: {reconnect_error}")
+                        _excel_com_state.reconnect_error_reported = True
+
+    # First-time startup: use xlwings' path lookup. It attaches to the workbook
+    # if already open, or opens it on first startup if it is not open yet.
     if not getattr(_excel_com_state, "connection_lost", False):
         try:
             workbook = xw.Book(TerminalSheetName)
