@@ -190,7 +190,9 @@ def get_terminal_workbook():
             if current_path == target_path:
                 _ = workbook.sheets[0].name
                 return workbook
-        except Exception:
+        except Exception as cached_error:
+            if is_excel_busy_error(cached_error):
+                raise
             _excel_com_state.workbook = None
             _excel_com_state.connection_lost = True
             if not getattr(_excel_com_state, "disconnect_reported", False):
@@ -209,11 +211,17 @@ def get_terminal_workbook():
                         # Validate the candidate in this worker before caching it.
                         _ = book.sheets[0].name
                         matches.append(book)
-                    except Exception:
+                    except Exception as book_error:
+                        if is_excel_busy_error(book_error):
+                            raise
                         continue
-            except Exception:
+            except Exception as app_error:
+                if is_excel_busy_error(app_error):
+                    raise
                 continue
-    except Exception:
+    except Exception as apps_error:
+        if is_excel_busy_error(apps_error):
+            raise
         pass
 
     if matches:
@@ -273,6 +281,8 @@ def get_terminal_workbook():
                         print("Excel workbook connection restored for this worker.")
                         return workbook
                     except Exception as reconnect_error:
+                        if is_excel_busy_error(reconnect_error):
+                            raise
                         _excel_com_state.workbook = None
                         last_reconnect_error = reconnect_error
                 if not getattr(_excel_com_state, "reconnect_error_reported", False):
@@ -290,6 +300,8 @@ def get_terminal_workbook():
             _excel_com_state.disconnect_reported = False
             return workbook
         except Exception as open_error:
+            if is_excel_busy_error(open_error):
+                raise
             _excel_com_state.workbook = None
             _excel_com_state.connection_lost = True
             if not getattr(_excel_com_state, "disconnect_reported", False):
@@ -426,6 +438,8 @@ def _shoonya_login_once():
     try:
         excel_name = get_terminal_workbook()
     except Exception as exc:
+        if is_excel_busy_error(exc):
+            raise
         print(f"Excel workbook could not be opened: {exc}")
         Text2Speech("Warning. Excel workbook is unavailable. Shoonya login cannot start.")
         return 0
