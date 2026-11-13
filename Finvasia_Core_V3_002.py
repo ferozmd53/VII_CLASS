@@ -2101,8 +2101,12 @@ def start_Trade_Terminal():
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " buyback at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
                                                             Telegram_Message.append(Message)
                                                         tt.range(f"BL{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
+                            except Exception as e:
+                                Message = "Exception occur in core order book management:" + str(e)
+                                logger.info(Message)
+                                pass
                         except Exception as e:
-                            Message = "Exception occur in core order book management:" + str(e)
+                            Message = "Exception occur while processing symbol row:" + str(e)
                             logger.info(Message)
                             pass
                 main_list.append(lst)
