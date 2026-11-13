@@ -243,7 +243,9 @@ def get_terminal_workbook():
         with EXCEL_RECONNECT_LOCK:
             try:
                 running_apps = list(xw.apps)
-            except Exception:
+            except Exception as apps_error:
+                if is_excel_busy_error(apps_error):
+                    raise
                 running_apps = []
 
             if running_apps:
@@ -263,9 +265,13 @@ def get_terminal_workbook():
                                 _excel_com_state.reconnect_error_reported = False
                                 print("Excel workbook connection restored for this worker.")
                                 return book
-                            except Exception:
+                            except Exception as book_error:
+                                if is_excel_busy_error(book_error):
+                                    raise
                                 continue
-                    except Exception:
+                    except Exception as app_error:
+                        if is_excel_busy_error(app_error):
+                            raise
                         continue
 
                 # Only open when the workbook is genuinely absent from all
