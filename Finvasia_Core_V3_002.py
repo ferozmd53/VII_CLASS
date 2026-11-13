@@ -50,6 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 voice_lock = Lock()
 LIVE_DATA_LOCK = Lock()
+EXCEL_RECONNECT_LOCK = Lock()
 SYSTEM_INTERNET_OK = None
 SYSTEM_EXCEL_OK = None
 BROKER_LOGIN_OK = False
@@ -227,19 +228,24 @@ def get_terminal_workbook():
                 running_apps = []
 
             if running_apps:
-                try:
-                    workbook = xw.Book(TerminalSheetName)
-                    _ = workbook.sheets[0].name
-                    _excel_com_state.workbook = workbook
-                    _excel_com_state.connection_lost = False
-                    _excel_com_state.disconnect_reported = False
-                    print("Excel workbook connection restored for this worker.")
-                    return workbook
-                except Exception as reconnect_error:
-                    _excel_com_state.workbook = None
-                    if not getattr(_excel_com_state, "reconnect_error_reported", False):
-                        print(f"Excel reconnect attempt failed; will retry: {reconnect_error}")
-                        _excel_com_state.reconnect_error_reported = True
+                # Open the workbook inside an existing Excel process. xw.Book(path)
+                # may create another Excel instance when COM ROT lookup fails.
+                for app in running_apps:
+                    try:
+                        workbook = app.books.open(TerminalSheetName)
+                        _ = workbook.sheets[0].name
+                        _excel_com_state.workbook = workbook
+                        _excel_com_state.connection_lost = False
+                        _excel_com_state.disconnect_reported = False
+                        _excel_com_state.reconnect_error_reported = False
+                        print("Excel workbook connection restored for this worker.")
+                        return workbook
+                    except Exception as reconnect_error:
+                        _excel_com_state.workbook = None
+                        last_reconnect_error = reconnect_error
+                if not getattr(_excel_com_state, "reconnect_error_reported", False):
+                    print(f"Excel reconnect attempt failed; will retry: {locals().get('last_reconnect_error', 'No active Excel instance')}")
+                    _excel_com_state.reconnect_error_reported = True
 
     # First-time startup: use xlwings' path lookup. It attaches to the workbook
     # if already open, or opens it on first startup if it is not open yet.
@@ -3654,8 +3660,10 @@ def StartThread():
         print(Message)
 
 print("Python Trader Excel Based Terminal program initialised")
-Thread(target=system_health_monitor, daemon=True).start()
 if Shoonya_login() == 1:
+    # Start the monitor only after the main thread has attached to the workbook.
+    # This prevents the monitor racing startup and opening a second Excel copy.
+    Thread(target=system_health_monitor, daemon=True).start()
     LoadInstrument_token()
     
     
