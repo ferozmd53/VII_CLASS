@@ -29,6 +29,7 @@ from Shoonya_Indicators import IndicatorEngine
 import os
 import time
 import json
+import queue
 import sys
 import platform
 from datetime import datetime as dt, timedelta, time, date
@@ -691,9 +692,12 @@ def event_handler_quote_update(inmessage):
         live_data[key] = symbol_info
 
 def event_handler_order_update(tick_data):
-    """Apply broker push updates to the exact order row when the ID is known."""
-    print(f"Order update {tick_data}")
+    """Queue broker push updates; Excel writes are handled by the main worker."""
     try:
+        if isinstance(tick_data, str):
+            tick_data = json.loads(tick_data)
+        if not isinstance(tick_data, dict):
+            return
         order_id = str(tick_data.get("norenordno") or "").strip()
         status = str(tick_data.get("status") or "").strip().upper()
         reason = str(tick_data.get("rejreason") or "").strip()
@@ -701,19 +705,45 @@ def event_handler_order_update(tick_data):
             return
         executed_price = tick_data.get("avgprc") or tick_data.get("flprc")
         broker_reason = reason if reason and reason != " " else status
+        update = {
+            "order_id": order_id, "status": status,
+            "executed_price": executed_price, "remarks": broker_reason,
+        }
         with SIDE_ORDER_TRACKER_LOCK:
             SIDE_ORDER_UPDATES[order_id] = {
                 "status": status, "executed_price": executed_price,
                 "remarks": broker_reason,
             }
-        if order_id in LimitOrderBook:
-            LimitOrderBook[order_id]["status"] = status
-            if executed_price not in (None, "", "0", 0):
-                LimitOrderBook[order_id]["Executed_price"] = executed_price
-            LimitOrderBook[order_id]["Remarks"] = broker_reason
-        update_side_order_display(order_id, status, executed_price, broker_reason)
+        SIDE_ORDER_UPDATE_QUEUE.put(update)
+        print(f"Queued Shoonya order update: {order_id} {status}")
     except Exception as exc:
-        print(f"Could not apply broker order update: {exc}")
+        print(f"Could not queue broker order update: {exc}")
+
+def process_side_order_updates(max_batch=500):
+    """Apply queued broker updates from the Excel-owning thread, not the WebSocket thread."""
+    processed = 0
+    while processed < max_batch:
+        try:
+            update = SIDE_ORDER_UPDATE_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        order_id = update["order_id"]
+        status = update.get("status")
+        executed_price = update.get("executed_price")
+        remarks = update.get("remarks")
+        with SIDE_ORDER_TRACKER_LOCK:
+            tracked_order = LimitOrderBook.setdefault(
+                order_id,
+                {"status": "PENDING", "Remarks": None, "Executed_price": None},
+            )
+            tracked_order["status"] = status or tracked_order.get("status", "PENDING")
+            if executed_price not in (None, "", "0", 0):
+                tracked_order["Executed_price"] = executed_price
+            if remarks:
+                tracked_order["Remarks"] = remarks
+        update_side_order_display(order_id, status, executed_price, remarks)
+        processed += 1
+    return processed
 
 def _resubscribe_registered_tokens():
     """Restore every queued/lifetime token through the single subscription path."""
@@ -1222,6 +1252,7 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
         print(f"Subscription watchdog error for {symbol} ({token_key}): {exc}")
 
 LimitOrderBook = {}
+SIDE_ORDER_UPDATE_QUEUE = queue.Queue()
 SIDE_ORDER_TRACKER = {}
 SIDE_ORDER_TRACKER_LOCK = Lock()
 SIDE_ORDER_UPDATES = {}
@@ -1266,7 +1297,8 @@ def register_side_order_display(symbol, side, order_id, display_row=None):
             SIDE_ORDER_TRACKER[str(order_id)] = {
                 "row": row_number, "side": side, "symbol": str(symbol),
             }
-        early_update = SIDE_ORDER_UPDATES.get(str(order_id)) or {}
+        with SIDE_ORDER_TRACKER_LOCK:
+            early_update = dict(SIDE_ORDER_UPDATES.get(str(order_id)) or {})
         if early_update:
             update_side_order_display(
                 str(order_id), early_update.get("status"),
@@ -1293,9 +1325,13 @@ def update_side_order_display(order_id, status, executed_price=None, remarks=Non
             else:
                 status_col, price_col = "Y", "Z"
             sheet = get_live_trade_sheet(get_terminal_workbook())
-            display_status = str(status or "").strip().upper()
-            if not display_status or display_status == "PENDING":
-                display_status = "PENDING"
+            display_status = str(status or "").strip().upper() or "PENDING"
+            old_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip().upper()
+            old_base = old_status.split("|", 1)[0].split(":", 1)[0].strip()
+            new_base = display_status.split("|", 1)[0].split(":", 1)[0].strip()
+            final_states = ("COMPLETE", "COMPLETED", "REJECTED", "CANCELLED", "CANCELED")
+            if old_base in final_states and new_base not in final_states:
+                display_status = old_status
             sheet.range(f"{status_col}{row_number}").value = display_status
             if executed_price not in (None, "", 0, "0"):
                 try:
@@ -3481,6 +3517,7 @@ def start_Open_Position():
                 print(f"Exception occur in OrderBook : {e}")
             pass
         try:
+            process_side_order_updates()
             order_book_snapshot = get_order_book()
             for key, value in list(LimitOrderBook.items()):
                 if value.get('status') not in ('COMPLETE', 'REJECTED', 'CANCELLED', 'CANCELED'):
