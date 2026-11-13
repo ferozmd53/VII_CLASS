@@ -665,6 +665,11 @@ SOCKET_SUBSCRIPTIONS = set()
 # Lifetime registry is for reconnect recovery. This second registry tracks
 # which tokens have actually been sent on the CURRENT WebSocket session.
 SOCKET_SESSION_SUBSCRIPTIONS = set()
+# Track subscription ownership so Excel deletions do not remove option-chain feeds.
+TERMINAL_SOCKET_SUBSCRIPTIONS = set()
+OPTION_CHAIN_SOCKET_SUBSCRIPTIONS = set()
+TERMINAL_DESIRED_SYMBOLS = set()
+TERMINAL_DESIRED_SYMBOLS_LOCK = Lock()
 SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 # Serialize subscribe commands: reconnect restoration and newly added symbols
 # can otherwise write to the Shoonya WebSocket from different threads at once.
@@ -785,7 +790,7 @@ def _resubscribe_registered_tokens():
     if not feed_opened:
         return
     with SOCKET_SUBSCRIPTIONS_LOCK:
-        tokens = sorted(SOCKET_SUBSCRIPTIONS)
+        tokens = sorted(TERMINAL_SOCKET_SUBSCRIPTIONS | OPTION_CHAIN_SOCKET_SUBSCRIPTIONS)
     if not tokens:
         print("WebSocket reconnected; no previous quote subscriptions to restore.")
         return
@@ -1171,7 +1176,7 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
     print(f"Instrument-master fallback verified: {exchange}:{tradingsymbol} -> {token}")
     return token
 
-def subscribe_symbol(token_key, force=False):
+def subscribe_symbol(token_key, force=False, source="terminal"):
     """
     The only function allowed to send Shoonya market-data subscriptions.
 
@@ -1190,6 +1195,10 @@ def subscribe_symbol(token_key, force=False):
     # and the send must not lose the requested instrument.
     with SOCKET_SUBSCRIPTIONS_LOCK:
         SOCKET_SUBSCRIPTIONS.add(token_key)
+        if source == "option_chain":
+            OPTION_CHAIN_SOCKET_SUBSCRIPTIONS.add(token_key)
+        elif source == "terminal":
+            TERMINAL_SOCKET_SUBSCRIPTIONS.add(token_key)
 
     if not feed_opened:
         print(f"Queued {token_key}; Shoonya WebSocket is not open yet.")
@@ -1229,7 +1238,7 @@ def subscribe_symbol(token_key, force=False):
         return "sent"
 
 
-def subscribe_symbols_batch(token_keys, force=False):
+def subscribe_symbols_batch(token_keys, force=False, source="terminal"):
     """Send a small batch of EXCHANGE|TOKEN subscriptions safely."""
     global api
     normalized = []
@@ -1246,6 +1255,10 @@ def subscribe_symbols_batch(token_keys, force=False):
     normalized = list(dict.fromkeys(normalized))
     with SOCKET_SUBSCRIPTIONS_LOCK:
         SOCKET_SUBSCRIPTIONS.update(normalized)
+        if source == "terminal":
+            TERMINAL_SOCKET_SUBSCRIPTIONS.update(normalized)
+        elif source == "option_chain":
+            OPTION_CHAIN_SOCKET_SUBSCRIPTIONS.update(normalized)
     if not feed_opened:
         return {"sent": 0, "already_sent": 0, "queued": len(normalized)}
 
@@ -1275,10 +1288,10 @@ def subscribe_symbols_batch(token_keys, force=False):
         return {"sent": len(batch), "already_sent": already, "queued": 0}
 
 
-def subscribe_new_token(exchange, Token, force=False):
+def subscribe_new_token(exchange, Token, force=False, source="terminal"):
     """Backward-compatible wrapper; all callers use the central send path."""
     token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
-    return subscribe_symbol(token_key, force=force)
+    return subscribe_symbol(token_key, force=force, source=source)
 
 
 def _watch_new_symbol_subscription(symbol, exchange, token):
@@ -1290,6 +1303,9 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
     token_key = f"{exchange}|{token}"
     try:
         for attempt in range(5):
+            with TERMINAL_DESIRED_SYMBOLS_LOCK:
+                if symbol not in TERMINAL_DESIRED_SYMBOLS:
+                    return
             sleep(3.0)
             with LIVE_DATA_LOCK:
                 quote_snapshot = dict(live_data.get(token_key, {}))
@@ -1832,6 +1848,9 @@ def start_Trade_Terminal():
                         "Shoonya REST session is not validated; refusing market-feed subscription."
                     )
                 token_key = exchange + "|" + str(token)
+                with TERMINAL_DESIRED_SYMBOLS_LOCK:
+                    if symbol not in TERMINAL_DESIRED_SYMBOLS:
+                        continue
                 with subscription_lock:
                     force_resubscribe = symbol in force_resubscribe_symbols
                 Symbol_Token[symbol] = token_key
@@ -2019,6 +2038,31 @@ def start_Trade_Terminal():
                     )
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
+            # Excel is the source of truth: reconcile additions, edits and deletions.
+            current_symbols = {
+                _extract_symbol(value) for value in symbols
+                if _extract_symbol(value)
+            }
+            with TERMINAL_DESIRED_SYMBOLS_LOCK:
+                TERMINAL_DESIRED_SYMBOLS.clear()
+                TERMINAL_DESIRED_SYMBOLS.update(current_symbols)
+            with subscription_lock:
+                removed_symbols = set(Symbol_Token) - current_symbols
+                for removed_symbol in removed_symbols:
+                    old_token_key = Symbol_Token.pop(removed_symbol, None)
+                    terminal_subscribed.discard(removed_symbol)
+                    subscription_pending.discard(removed_symbol)
+                    subscription_retry_after.pop(removed_symbol, None)
+                    force_resubscribe_symbols.discard(removed_symbol)
+                    if old_token_key:
+                        with SOCKET_SUBSCRIPTIONS_LOCK:
+                            TERMINAL_SOCKET_SUBSCRIPTIONS.discard(old_token_key)
+                            if old_token_key not in OPTION_CHAIN_SOCKET_SUBSCRIPTIONS:
+                                SOCKET_SUBSCRIPTIONS.discard(old_token_key)
+                                SOCKET_SESSION_SUBSCRIPTIONS.discard(old_token_key)
+                        with LIVE_DATA_LOCK:
+                            live_data.pop(old_token_key, None)
+                            SYMBOLDICT.pop(old_token_key, None)
             trading_info = tt.range("BA4:BS1000").value
             terminal_inputs = tt.range("M4:W1000").value
             management_inputs = tt.range("AA4:AD1000").value
@@ -2943,9 +2987,9 @@ def start_optionchain():
                                         CE_Token = strike_dict.get("CE_Token")
                                         # print(CE_Token)
                                         if PE_Token != "NA":
-                                            subscribe_new_token(Exchange, PE_Token)
+                                            subscribe_new_token(Exchange, PE_Token, source="option_chain")
                                         if CE_Token != "NA":
-                                            subscribe_new_token(Exchange, CE_Token)
+                                            subscribe_new_token(Exchange, CE_Token, source="option_chain")
 
                             if input_symbol not in subs_lst:
                                 subs_lst.append(input_symbol)
@@ -3671,9 +3715,9 @@ def start_optionchain_Pro():
                                         CE_Token = strike_dict.get("CE_Token")
                                         # print(CE_Token)
                                         if PE_Token != "NA":
-                                            subscribe_new_token(Exchange, PE_Token)
+                                            subscribe_new_token(Exchange, PE_Token, source="option_chain")
                                         if CE_Token != "NA":
-                                            subscribe_new_token(Exchange, CE_Token)
+                                            subscribe_new_token(Exchange, CE_Token, source="option_chain")
 
                             if input_symbol not in subs_lst:
                                 subs_lst.append(input_symbol)
