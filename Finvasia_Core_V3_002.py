@@ -851,7 +851,17 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     global logger
     tradingsymbol = symbol[4:]
     exchange = symbol[:3]
-    
+
+    # Only MARKET, LIMIT and SL-M are supported. Anything else is blocked here
+    # so price_type/trigger_price can never be left undefined.
+    order_type = str(order_type or "").strip().upper()
+    if order_type not in ("MARKET", "LIMIT", "SL-M"):
+        print(
+            f"Live order blocked for {tradingsymbol}: unsupported order type "
+            f"{order_type!r}; use MARKET, LIMIT or SL-M."
+        )
+        return None
+
     if order_type == 'MARKET':
         # A MARKET selection must reach Shoonya as a true MKT order.
         # Do not convert it to LMT at the last traded price; that can leave
