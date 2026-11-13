@@ -1051,8 +1051,8 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
         pass
     return Token
 
-def subscribe_new_token(exchange, Token):
-    """Send a market-feed subscription immediately; never wait for a tick/ACK."""
+def subscribe_new_token(exchange, Token, force=False):
+    """Send a market-feed subscription immediately; optionally resend it."""
     global api
     token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
     if not feed_opened:
@@ -1068,7 +1068,7 @@ def subscribe_new_token(exchange, Token):
         with SOCKET_SUBSCRIBE_SEND_LOCK:
             if not feed_opened:
                 raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
-            if not already_registered:
+            if force or not already_registered:
                 api.subscribe([token_key])
     except Exception:
         # Do not retain a failed first-time subscription; the terminal worker
@@ -1077,6 +1077,46 @@ def subscribe_new_token(exchange, Token):
             with SOCKET_SUBSCRIPTIONS_LOCK:
                 SOCKET_SUBSCRIPTIONS.discard(token_key)
         raise
+
+
+def _watch_new_symbol_subscription(symbol, exchange, token):
+    """Verify that a newly subscribed symbol produces a real WebSocket tick.
+
+    If no tick arrives, resend only the market-feed subscription. This check
+    deliberately does not call REST quote APIs or write synthetic quote data.
+    """
+    token_key = f"{exchange}|{token}"
+    try:
+        for attempt in range(5):
+            sleep(3.0)
+            with LIVE_DATA_LOCK:
+                if live_data.get(token_key):
+                    print(f"First WebSocket tick received for {symbol} ({token_key}).")
+                    return
+
+            if not feed_opened:
+                print(f"Waiting for WebSocket reconnection to receive {symbol} ({token_key}).")
+                continue
+
+            if attempt < 4:
+                print(
+                    f"No WebSocket tick for {symbol} ({token_key}); "
+                    f"resending subscription ({attempt + 1}/4)."
+                )
+                try:
+                    subscribe_new_token(exchange, token, force=True)
+                except Exception as exc:
+                    print(f"Subscription retry failed for {symbol} ({token_key}): {exc}")
+
+        with LIVE_DATA_LOCK:
+            received = bool(live_data.get(token_key))
+        if not received:
+            print(
+                f"WARNING: {symbol} ({token_key}) has no WebSocket tick after "
+                "four subscription retries. Check the symbol/token or market status."
+            )
+    except Exception as exc:
+        print(f"Subscription watchdog error for {symbol} ({token_key}): {exc}")
 
 LimitOrderBook = {}
 
@@ -1521,11 +1561,23 @@ def start_Trade_Terminal():
             if token is None or str(token).strip() == "":
                 raise ValueError(f"No instrument token found for {symbol}")
             token_key = exchange + "|" + str(token)
-            subscribe_new_token(exchange, token)
+            # Make the token available to the independent Excel writer as soon
+            # as it is resolved; remove it again if the subscribe call fails.
             Symbol_Token[symbol] = token_key
+            try:
+                subscribe_new_token(exchange, token)
+            except Exception:
+                Symbol_Token.pop(symbol, None)
+                raise
             with subscription_lock:
                 terminal_subscribed.add(symbol)
-            print(f"Symbol = {symbol}, Token={token} subscribed")
+            print(f"Symbol = {symbol}, Token={token} subscription sent; waiting for first WebSocket tick")
+            Thread(
+                target=_watch_new_symbol_subscription,
+                args=(symbol, exchange, token),
+                daemon=True,
+                name=f"SymbolFeedCheck-{tradingsymbol}"
+            ).start()
         except Exception as exc:
             print(f"Subscribe error {symbol}: {exc}")
             with subscription_lock:
