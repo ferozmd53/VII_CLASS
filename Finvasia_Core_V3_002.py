@@ -1929,7 +1929,7 @@ def start_Trade_Terminal():
                     market_rows = []
                     for market_symbol in market_symbols:
                         values = [None] * 11
-                                        symbol_key = _extract_symbol(market_symbol)
+                        symbol_key = _extract_symbol(market_symbol)
                         if symbol_key:
                             token_key = Symbol_Token.get(symbol_key)
                             if token_key:
