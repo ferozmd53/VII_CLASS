@@ -214,8 +214,29 @@ def get_terminal_workbook():
             print("Excel workbook connection restored for this worker.")
         return workbook
 
-    # Never launch a second Excel instance after a disconnect. Attach only
-    # after the user has opened VII_CLASS.xlsm again.
+    # First-time startup is different from recovery: when this thread has
+    # never connected, use xlwings' documented path lookup. It attaches to the
+    # workbook if already open, or opens it once if it is not open yet.
+    # After a real disconnect, never use xw.Book(path), because that could
+    # launch a second Excel copy; recovery must attach to the reopened workbook.
+    if not getattr(_excel_com_state, "connection_lost", False):
+        try:
+            workbook = xw.Book(TerminalSheetName)
+            _ = workbook.sheets[0].name
+            _excel_com_state.workbook = workbook
+            _excel_com_state.connection_lost = False
+            _excel_com_state.disconnect_reported = False
+            return workbook
+        except Exception as open_error:
+            _excel_com_state.workbook = None
+            _excel_com_state.connection_lost = True
+            if not getattr(_excel_com_state, "disconnect_reported", False):
+                print(f"Could not attach/open {os.path.basename(TerminalSheetName)}: {open_error}")
+                _excel_com_state.disconnect_reported = True
+            raise RuntimeError(
+                f"Excel workbook could not be opened: {os.path.basename(TerminalSheetName)}"
+            ) from open_error
+
     _excel_com_state.workbook = None
     _excel_com_state.connection_lost = True
     if not getattr(_excel_com_state, "disconnect_reported", False):
