@@ -1213,6 +1213,10 @@ LimitOrderBook = {}
 SIDE_ORDER_TRACKER = {}
 SIDE_ORDER_TRACKER_LOCK = Lock()
 SIDE_ORDER_UPDATES = {}
+# Required latch state for the independent Excel BUY/SELL command dispatcher.
+# Keep one state per worksheet row and side to prevent duplicate submissions.
+SIDE_TRIGGER_STATE_LOCK = Lock()
+SIDE_TRIGGER_STATE = {}
 SIDE_ORDER_EXECUTOR = ThreadPoolExecutor(
     max_workers=64, thread_name_prefix="ShoonyaSideOrder"
 )
