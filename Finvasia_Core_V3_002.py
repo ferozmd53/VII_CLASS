@@ -45,7 +45,7 @@ from datetime import datetime as dt, timedelta, time, date
 from time import sleep, monotonic as _monotonic
 import logging
 import socket
-from threading import Thread, Lock, local
+from threading import Thread, Lock, local, Event
 from concurrent.futures import ThreadPoolExecutor
 
 voice_lock = Lock()
@@ -627,6 +627,8 @@ SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 # Serialize subscribe commands: reconnect restoration and newly added symbols
 # can otherwise write to the Shoonya WebSocket from different threads at once.
 SOCKET_SUBSCRIBE_SEND_LOCK = Lock()
+SOCKET_SUBSCRIPTION_ACKS = {}
+SOCKET_SUBSCRIPTION_ACKS_LOCK = Lock()
 indicator_engine = IndicatorEngine()
 
 Telegram_Message = ["Welcome to Python Trader excel based trade terminal","Have a Good Day"]
@@ -693,7 +695,19 @@ def event_handler_quote_update(inmessage):
 
     message = {field: inmessage[field] for field in set(fields) & set(inmessage.keys())}
     # print(message)
-    key = inmessage["e"] + "|" + inmessage["tk"]
+    exchange = str(inmessage.get("e") or "").strip().upper()
+    token = str(inmessage.get("tk") or "").strip()
+    if not exchange or not token:
+        return
+    key = exchange + "|" + token
+
+    # Shoonya's t='tk' message confirms the broker accepted this instrument.
+    if str(inmessage.get("t") or "").lower() == "tk":
+        with SOCKET_SUBSCRIPTION_ACKS_LOCK:
+            ack_event = SOCKET_SUBSCRIPTION_ACKS.get(key)
+        if ack_event is not None:
+            ack_event.set()
+            print(f"Shoonya feed ACK received: {key} ({inmessage.get('ts', '')})")
 
     # Keep quote ingestion short and independent from Excel/order workers.
     # Replace the snapshot atomically so readers never see a half-updated OHLC tick.
@@ -1024,18 +1038,31 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
         pass
     return Token
 
-def subscribe_new_token(exchange, Token):
-    """Subscribe a new quote token and register it for reconnect recovery."""
+def subscribe_new_token(exchange, Token, ack_timeout=5.0):
+    """Subscribe a token and wait for Shoonya's initial market-feed acknowledgement."""
     global api
     token_key = f"{exchange}|{Token}"
     if not feed_opened:
         raise RuntimeError("Shoonya WebSocket is not open; subscription will be retried.")
-    with SOCKET_SUBSCRIBE_SEND_LOCK:
-        if not feed_opened:
-            raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
-        api.subscribe([token_key])
-    with SOCKET_SUBSCRIPTIONS_LOCK:
-        SOCKET_SUBSCRIPTIONS.add(token_key)
+    ack_event = Event()
+    with SOCKET_SUBSCRIPTION_ACKS_LOCK:
+        SOCKET_SUBSCRIPTION_ACKS[token_key] = ack_event
+    try:
+        with SOCKET_SUBSCRIBE_SEND_LOCK:
+            if not feed_opened:
+                raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
+            api.subscribe(token_key)
+        if not ack_event.wait(ack_timeout):
+            raise TimeoutError(
+                f"No Shoonya market-feed ACK received for {token_key} "
+                f"within {ack_timeout:.0f} seconds"
+            )
+        with SOCKET_SUBSCRIPTIONS_LOCK:
+            SOCKET_SUBSCRIPTIONS.add(token_key)
+    finally:
+        with SOCKET_SUBSCRIPTION_ACKS_LOCK:
+            if SOCKET_SUBSCRIPTION_ACKS.get(token_key) is ack_event:
+                SOCKET_SUBSCRIPTION_ACKS.pop(token_key, None)
 
 LimitOrderBook = {}
 
@@ -1464,6 +1491,7 @@ def start_Trade_Terminal():
     Symbol_Token = {}
     terminal_subscribed = set()
     subscription_pending = set()
+    subscription_retry_after = {}
     subscription_lock = Lock()
     from concurrent.futures import ThreadPoolExecutor
     subscription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="SymbolSubscribe")
@@ -1486,6 +1514,8 @@ def start_Trade_Terminal():
             print(f"Symbol = {symbol}, Token={token} subscribed")
         except Exception as exc:
             print(f"Subscribe error {symbol}: {exc}")
+            with subscription_lock:
+                subscription_retry_after[symbol] = _monotonic() + 5.0
         finally:
             with subscription_lock:
                 subscription_pending.discard(symbol)
@@ -1586,7 +1616,12 @@ def start_Trade_Terminal():
                 i = str(i).strip().upper() if i is not None else ""
                 if i:
                     with subscription_lock:
-                        needs_subscription = i not in terminal_subscribed and i not in subscription_pending
+                        retry_ready = _monotonic() >= subscription_retry_after.get(i, 0.0)
+                        needs_subscription = (
+                            i not in terminal_subscribed
+                            and i not in subscription_pending
+                            and retry_ready
+                        )
                         if needs_subscription:
                             subscription_pending.add(i)
                     if needs_subscription:
