@@ -170,7 +170,12 @@ def normalize_expiry_input(value):
         return value
     if isinstance(value, (int, float, np.integer, np.floating)):
         try:
-            return pd.to_datetime(value, unit="D", origin="1899-12-30").date()
+            # Excel may return 0 for a blank date-formatted cell. Serial
+            # zero is 30-12-1899, not a usable option expiry.
+            serial = float(value)
+            if not np.isfinite(serial) or serial <= 0:
+                return None
+            return pd.to_datetime(serial, unit="D", origin="1899-12-30").date()
         except Exception:
             return None
     if isinstance(value, str):
