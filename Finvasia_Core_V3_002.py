@@ -1038,37 +1038,51 @@ def get_order_book():
     return df_order_book
 
 def GetToken_UsingSymbol(exchange, tradingsymbol):
+    """Resolve an exact exchange/trading-symbol match; never take searchscrip's first hit blindly."""
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
     global api
-    try:
-        if exchange == 'NSE':
-            df_ins_temp = df_ins_NSE[df_ins_NSE.TradingSymbol == tradingsymbol]
-            Token = df_ins_temp.iloc[0]['Token']
-        elif exchange == 'BSE':
-            if tradingsymbol in IndexList:
-                Token = Token_list[tradingsymbol]
-            else:
-                df_ins_temp = df_ins_BSE[df_ins_BSE.TradingSymbol == tradingsymbol]
-                Token = df_ins_temp.iloc[0]['Token']
-        elif exchange == 'NFO':
-            df_ins_temp = df_ins_NFO[df_ins_NFO.TradingSymbol == tradingsymbol]
-            Token = df_ins_temp.iloc[0]['Token']
-        elif exchange == 'BFO':
-            df_ins_temp = df_ins_BFO[df_ins_BFO.TradingSymbol == tradingsymbol]
-            Token = df_ins_temp.iloc[0]['Token']
-        elif exchange == 'CDS':
-            df_ins_temp = df_ins_CDS[df_ins_CDS.TradingSymbol == tradingsymbol]
-            Token = df_ins_temp.iloc[0]['Token']
-        elif exchange == 'MCX':
-            df_ins_temp = df_ins_MCX[df_ins_MCX.TradingSymbol == tradingsymbol]
-            Token = df_ins_temp.iloc[0]['Token']
-        #print(f"Token = {Token}")
-    except Exception as e:
-        #print(f"Exception : {e}")
-        Token = api.searchscrip(exchange=exchange, searchtext=tradingsymbol).get("values")[0].get("token")
-        #print(f"latest Token = {Token}")
-        pass
-    return Token
+    exchange = str(exchange or "").strip().upper()
+    tradingsymbol = str(tradingsymbol or "").strip().upper()
+    if not exchange or not tradingsymbol:
+        raise ValueError("Exchange and trading symbol are required to resolve an instrument token.")
+
+    if exchange == "BSE" and tradingsymbol in IndexList:
+        return Token_list[tradingsymbol]
+
+    master_by_exchange = {
+        "NSE": df_ins_NSE, "BSE": df_ins_BSE, "NFO": df_ins_NFO,
+        "BFO": df_ins_BFO, "CDS": df_ins_CDS, "MCX": df_ins_MCX,
+    }
+    master = master_by_exchange.get(exchange)
+    if master is not None and not master.empty:
+        matches = master[
+            master["TradingSymbol"].astype(str).str.strip().str.upper() == tradingsymbol
+        ]
+        if not matches.empty:
+            token = str(matches.iloc[0]["Token"]).strip()
+            if token and token.lower() != "nan":
+                return token
+
+    # Instrument-master fallback: accept only an exact tsym match from Shoonya.
+    response = api.searchscrip(exchange=exchange, searchtext=tradingsymbol)
+    values = response.get("values", []) if isinstance(response, dict) else []
+    exact_matches = [
+        item for item in values
+        if str(item.get("tsym") or "").strip().upper() == tradingsymbol
+        and str(item.get("token") or "").strip()
+    ]
+    if not exact_matches:
+        candidates = [
+            f"{item.get('tsym')} (token {item.get('token')})"
+            for item in values[:5]
+        ]
+        raise ValueError(
+            f"No exact instrument-master match for {exchange}:{tradingsymbol}. "
+            f"Search candidates: {', '.join(candidates) or 'none'}"
+        )
+    token = str(exact_matches[0]["token"]).strip()
+    print(f"Instrument-master fallback verified: {exchange}:{tradingsymbol} -> {token}")
+    return token
 
 def subscribe_new_token(exchange, Token, force=False):
     """Send a market-feed subscription immediately; optionally resend it."""
@@ -1088,7 +1102,17 @@ def subscribe_new_token(exchange, Token, force=False):
             if not feed_opened:
                 raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
             if force or not already_registered:
-                api.subscribe([token_key])
+                subscribe_result = api.subscribe([token_key])
+                # Some Shoonya SDK builds return None on a successful send.
+                # Log explicit broker-side rejection payloads, but do not treat
+                # a None return as proof that the subscription was rejected.
+                if isinstance(subscribe_result, dict):
+                    if str(subscribe_result.get("stat", "")).strip().lower() not in ("", "ok"):
+                        raise RuntimeError(
+                            f"Shoonya rejected subscribe {token_key}: {subscribe_result}"
+                        )
+                    if subscribe_result:
+                        print(f"Shoonya subscribe response for {token_key}: {subscribe_result}")
     except Exception:
         # Do not retain a failed first-time subscription; the terminal worker
         # will retry it. Existing registrations remain available for reconnect.
@@ -1582,6 +1606,10 @@ def start_Trade_Terminal():
             if token is None or str(token).strip() == "":
                 raise ValueError(f"No instrument token found for {symbol}")
             token_key = exchange + "|" + str(token)
+            if not BROKER_LOGIN_OK:
+                raise RuntimeError(
+                    "Shoonya REST session is not validated; refusing market-feed subscription."
+                )
             # A workbook-recovery replay forces a fresh Shoonya subscribe even
             # when this token is already present in the socket registry.
             with subscription_lock:
@@ -1680,18 +1708,47 @@ def start_Trade_Terminal():
             tt = get_live_trade_sheet(excel_TT)
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
-                active_symbols = [
-                    str(value).strip().upper() for value in tt.range("A4:A1000").value
-                    if value is not None and str(value).strip()
-                ]
-                with subscription_lock:
-                    terminal_subscribed.clear()
-                    force_resubscribe_symbols.update(active_symbols)
-                last_excel_reconnect_generation = current_reconnect_generation
-                print(
-                    "Excel recovery detected: scheduling fresh WebSocket subscriptions "
-                    f"for {len(active_symbols)} active Trade_Terminal symbols."
-                )
+                # Excel recovery and Shoonya session recovery are separate.
+                # Validate the authenticated REST session before replaying feed
+                # subscriptions, so a stale login is not mistaken for a feed issue.
+                try:
+                    session_check = api.get_limits()
+                    session_valid = (
+                        isinstance(session_check, dict)
+                        and str(session_check.get("stat", "")).strip().lower() == "ok"
+                    )
+                except Exception as session_error:
+                    session_valid = False
+                    print(f"Shoonya session check failed after Excel recovery: {session_error}")
+
+                if not session_valid:
+                    BROKER_LOGIN_OK = False
+                    last_excel_reconnect_generation = current_reconnect_generation
+                    print(
+                        "Excel reopened, but Shoonya REST session validation failed. "
+                        "Fresh WebSocket subscriptions were NOT sent. Restart run.py "
+                        "to perform the normal reusable-session/OAuth login again."
+                    )
+                elif not feed_opened:
+                    print(
+                        "Excel reopened and Shoonya REST session is valid, but the "
+                        "WebSocket is not open yet. Subscription workers will retry "
+                        "when the socket reconnects."
+                    )
+                else:
+                    active_symbols = [
+                        str(value).strip().upper() for value in tt.range("A4:A1000").value
+                        if value is not None and str(value).strip()
+                    ]
+                    with subscription_lock:
+                        terminal_subscribed.clear()
+                        force_resubscribe_symbols.update(active_symbols)
+                    last_excel_reconnect_generation = current_reconnect_generation
+                    print(
+                        "Excel recovery confirmed; Shoonya REST session is valid and "
+                        "WebSocket is open. Scheduling fresh subscriptions for "
+                        f"{len(active_symbols)} active Trade_Terminal symbols."
+                    )
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
             trading_info = tt.range("BA4:BS1000").value
