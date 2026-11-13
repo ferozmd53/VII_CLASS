@@ -130,7 +130,7 @@ OptionChain_template = []
 subs_lst = []
 subs_pending_lst = []
 
-Indices_To_check_instrument_Sheet = ["NIFTY","BANKNIFTY","SENSEX" "SENSEX50", "BANKEX"]
+Indices_To_check_instrument_Sheet = ["NIFTY", "BANKNIFTY", "SENSEX", "SENSEX50", "BANKEX"]
 IndexList = ["NIFTY", "BANKNIFTY", "FINNIFTY","INDIAVIX","MIDCPNIFTY", "SENSEX", "SENSEX50", "BANKEX"]
 Token_list = {'NIFTY':26000,'MIDCPNIFTY':26074,'BANKNIFTY':26009,'FINNIFTY':26037,'INDIAVIX':26017, 'SENSEX':1, 'SENSEX50':47, 'BANKEX':12}
 
@@ -781,7 +781,7 @@ def event_handler_order_update(tick_data):
         print(f"Could not apply broker order update: {exc}")
 
 def _resubscribe_registered_tokens():
-    """Restore all previously requested quote tokens after WebSocket reconnect."""
+    """Restore every queued/lifetime token through the single subscription path."""
     if not feed_opened:
         return
     with SOCKET_SUBSCRIPTIONS_LOCK:
@@ -790,35 +790,32 @@ def _resubscribe_registered_tokens():
         print("WebSocket reconnected; no previous quote subscriptions to restore.")
         return
 
-    restored = 0
+    sent = 0
     already_sent = 0
+    queued = 0
     failed = 0
     for token_key in tokens:
         if not feed_opened:
             break
         try:
-            with SOCKET_SUBSCRIBE_SEND_LOCK:
-                if not feed_opened:
-                    break
-                with SOCKET_SUBSCRIPTIONS_LOCK:
-                    sent_this_session = token_key in SOCKET_SESSION_SUBSCRIPTIONS
-                if sent_this_session:
-                    already_sent += 1
-                    continue
-                api.subscribe([token_key])
-                with SOCKET_SUBSCRIPTIONS_LOCK:
-                    SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
-            restored += 1
-            sleep(0.02)
+            result = subscribe_symbol(token_key)
+            if result == "sent":
+                sent += 1
+            elif result == "already_sent":
+                already_sent += 1
+            elif result == "queued":
+                queued += 1
+                break
         except Exception as exc:
             failed += 1
             print(f"WebSocket resubscribe failed for {token_key}: {exc}")
             sleep(0.10)
+        else:
+            sleep(0.02)
     print(
-        f"WebSocket resubscription finished: {restored}/{len(tokens)} "
-        f"tokens restored; {already_sent} already sent this session; {failed} failed."
+        f"WebSocket resubscription finished: {sent} sent, "
+        f"{already_sent} already sent, {queued} queued, {failed} failed."
     )
-
 
 def open_callback():
     global feed_opened
@@ -1158,56 +1155,67 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
     print(f"Instrument-master fallback verified: {exchange}:{tradingsymbol} -> {token}")
     return token
 
-def subscribe_new_token(exchange, Token, force=False):
-    """Send a token once per live socket session; force=True explicitly retries."""
-    global api
-    token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
-    if not feed_opened:
-        raise RuntimeError("Shoonya WebSocket is not open; subscription will be retried.")
+def subscribe_symbol(token_key, force=False):
+    """
+    The only function allowed to send Shoonya market-data subscriptions.
 
-    # Keep a lifetime registry for reconnect recovery, but never use that
-    # registry to decide whether this token was sent on the current socket.
+    Tokens are retained in SOCKET_SUBSCRIPTIONS even when the socket is down,
+    and are sent at most once per live socket session unless force=True.
+    """
+    global api
+    token_key = str(token_key or "").strip().upper()
+    if "|" not in token_key:
+        raise ValueError(f"Invalid Shoonya token key {token_key!r}; expected EXCHANGE|TOKEN")
+    exchange, token = token_key.split("|", 1)
+    if not exchange or not token:
+        raise ValueError(f"Invalid Shoonya token key {token_key!r}")
+
+    # Always queue the token first. A disconnect between symbol resolution
+    # and the send must not lose the requested instrument.
     with SOCKET_SUBSCRIPTIONS_LOCK:
-        already_registered = token_key in SOCKET_SUBSCRIPTIONS
         SOCKET_SUBSCRIPTIONS.add(token_key)
 
-    try:
-        with SOCKET_SUBSCRIBE_SEND_LOCK:
-            if not feed_opened:
-                raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
+    if not feed_opened:
+        print(f"Queued {token_key}; Shoonya WebSocket is not open yet.")
+        return "queued"
 
-            # Recheck while holding the send lock: the reconnect restoration
-            # worker and the new-symbol worker may reach this token together.
-            with SOCKET_SUBSCRIPTIONS_LOCK:
-                sent_this_session = token_key in SOCKET_SESSION_SUBSCRIPTIONS
+    with SOCKET_SUBSCRIBE_SEND_LOCK:
+        # The socket can close while this thread waits for the send lock.
+        if not feed_opened:
+            print(f"Queued {token_key}; WebSocket closed before the send.")
+            return "queued"
 
-            if force or not sent_this_session:
-                with SUBSCRIPTION_DIAGNOSTIC_LOCK:
-                    SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(token_key)
-                    SUBSCRIPTION_CALLBACK_LOGGED.discard(token_key)
+        with SOCKET_SUBSCRIPTIONS_LOCK:
+            sent_this_session = token_key in SOCKET_SESSION_SUBSCRIPTIONS
+        if sent_this_session and not force:
+            return "already_sent"
 
-                subscribe_result = api.subscribe([token_key])
-                if isinstance(subscribe_result, dict):
-                    if str(subscribe_result.get("stat", "")).strip().lower() not in ("", "ok"):
-                        raise RuntimeError(
-                            f"Shoonya rejected subscribe {token_key}: {subscribe_result}"
-                        )
-                    if subscribe_result:
-                        print(f"Shoonya subscribe response for {token_key}: {subscribe_result}")
+        with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+            SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(token_key)
+            SUBSCRIPTION_CALLBACK_LOGGED.discard(token_key)
 
-                # Record only after the SDK call succeeds. A later watchdog
-                # retry can still force a resend if the server sends no tick.
-                with SOCKET_SUBSCRIPTIONS_LOCK:
-                    SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
-            else:
-                print(
-                    f"Subscription already sent in this WebSocket session: {token_key}"
+        # Shoonya's subscribe API is asynchronous. A successful local return
+        # means only that the SDK accepted the send call, not that the server
+        # acknowledged the instrument or delivered a quote.
+        subscribe_result = api.subscribe([token_key])
+        if isinstance(subscribe_result, dict):
+            response_status = str(subscribe_result.get("stat", "")).strip().lower()
+            if response_status not in ("", "ok"):
+                raise RuntimeError(
+                    f"Shoonya rejected subscribe {token_key}: {subscribe_result}"
                 )
-    except Exception:
-        if not already_registered:
-            with SOCKET_SUBSCRIPTIONS_LOCK:
-                SOCKET_SUBSCRIPTIONS.discard(token_key)
-        raise
+            if subscribe_result:
+                print(f"Shoonya subscribe response for {token_key}: {subscribe_result}")
+
+        with SOCKET_SUBSCRIPTIONS_LOCK:
+            SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
+        return "sent"
+
+
+def subscribe_new_token(exchange, Token, force=False):
+    """Backward-compatible wrapper; all callers use the central send path."""
+    token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
+    return subscribe_symbol(token_key, force=force)
 
 
 def _watch_new_symbol_subscription(symbol, exchange, token):
