@@ -2,7 +2,7 @@
 from pathlib import Path
 import sys
 
-workbook = Path(__file__).resolve().with_name("Finvasia_Trade_Terminal_v3.xlsm")
+workbook = Path(__file__).resolve().with_name("VII_CLASS.xlsm")
 if len(sys.argv) == 1:
     sys.argv.append(str(workbook))
 
