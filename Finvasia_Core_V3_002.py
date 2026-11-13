@@ -42,7 +42,7 @@ import json
 import sys
 import platform
 from datetime import datetime as dt, timedelta, time, date
-from time import sleep
+from time import sleep, monotonic as _monotonic
 import logging
 import socket
 from threading import Thread, Lock, local
@@ -302,8 +302,8 @@ def get_terminal_workbook():
                 # Excel once and open the workbook. The cooldown stops a
                 # failing launch from spawning Excel windows every 8 seconds.
                 global _LAST_EXCEL_RELAUNCH
-                now = time.time()
-                if now - _LAST_EXCEL_RELAUNCH >= EXCEL_RELAUNCH_COOLDOWN_SEC:
+                now = _monotonic()
+                if _LAST_EXCEL_RELAUNCH == 0.0 or now - _LAST_EXCEL_RELAUNCH >= EXCEL_RELAUNCH_COOLDOWN_SEC:
                     _LAST_EXCEL_RELAUNCH = now
                     try:
                         print("No running Excel found. Relaunching Excel and opening the workbook...")
