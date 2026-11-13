@@ -51,6 +51,8 @@ from concurrent.futures import ThreadPoolExecutor
 voice_lock = Lock()
 LIVE_DATA_LOCK = Lock()
 EXCEL_RECONNECT_LOCK = Lock()
+_LAST_EXCEL_RELAUNCH = 0.0
+EXCEL_RELAUNCH_COOLDOWN_SEC = 30
 SYSTEM_INTERNET_OK = None
 SYSTEM_EXCEL_OK = None
 BROKER_LOGIN_OK = False
@@ -294,6 +296,31 @@ def get_terminal_workbook():
                 if not getattr(_excel_com_state, "reconnect_error_reported", False):
                     print(f"Excel reconnect attempt failed; will retry: {locals().get('last_reconnect_error', 'No active Excel instance')}")
                     _excel_com_state.reconnect_error_reported = True
+
+            else:
+                # No Excel process at all (typical after a crash). Relaunch
+                # Excel once and open the workbook. The cooldown stops a
+                # failing launch from spawning Excel windows every 8 seconds.
+                global _LAST_EXCEL_RELAUNCH
+                now = time.time()
+                if now - _LAST_EXCEL_RELAUNCH >= EXCEL_RELAUNCH_COOLDOWN_SEC:
+                    _LAST_EXCEL_RELAUNCH = now
+                    try:
+                        print("No running Excel found. Relaunching Excel and opening the workbook...")
+                        new_app = xw.App(visible=True, add_book=False)
+                        workbook = new_app.books.open(TerminalSheetName)
+                        _ = workbook.sheets[0].name
+                        _excel_com_state.workbook = workbook
+                        _excel_com_state.connection_lost = False
+                        _excel_com_state.disconnect_reported = False
+                        _excel_com_state.reconnect_error_reported = False
+                        print("Excel workbook connection restored for this worker.")
+                        return workbook
+                    except Exception as relaunch_error:
+                        if is_excel_busy_error(relaunch_error):
+                            raise
+                        _excel_com_state.workbook = None
+                        print(f"Excel relaunch failed; will retry in {EXCEL_RELAUNCH_COOLDOWN_SEC}s: {relaunch_error}")
 
     # First-time startup: use xlwings' path lookup. It attaches to the workbook
     # if already open, or opens it on first startup if it is not open yet.
