@@ -2,9 +2,7 @@
 """
 Created on Fri Oct 14 09:13:23 2022
 
-
 Disclaimer: The information provided by the Python Traders channel is for educational purposes only, so please contact your financial adviser before placing your trade. Developer is not responsible for any profit/loss happened due to coding, logical or any type of error.
-
 
 Toots Feature :
 1. Trade terminal places live broker orders only (REAL mode).
@@ -27,7 +25,7 @@ warnings.filterwarnings("ignore")
 from Shoonya_OAuth import login_with_excel
 from get_auth import get_auth_code
 from Shoonya_Indicators import IndicatorEngine
-#from Noren import NorenApi
+#import Noren
 import os
 import time
 import json
@@ -93,7 +91,6 @@ finally:
 try:
     import pyttsx3
 except (ModuleNotFoundError, ImportError):
-    #print("pyttsx3 module not found")
     os.system(f"{sys.executable} -m pip install -U pyttsx3")
 finally:
     import pyttsx3
@@ -120,11 +117,8 @@ except ImportError:
         .text
     )
 
-
 print("HI welcome")
     
-#logging.basicConfig(level=logging.DEBUG)
-
 df_ins_NFO = pd.DataFrame()
 
 OptionChain_template = []
@@ -146,7 +140,6 @@ except Exception:
 # Book/Sheet proxy between Python threads: each worker must bind its own proxy.
 _excel_com_state = local()
 
-
 def ensure_excel_com_initialized():
     """Initialize COM once in each Python worker thread on Windows."""
     if os.name != "nt" or getattr(_excel_com_state, "initialized", False):
@@ -158,7 +151,15 @@ def ensure_excel_com_initialized():
     except Exception:
         pass
 
-
+def _extract_symbol(value):
+    """Safely extract a symbol string from xlwings range values, which may be 1D or 2D lists."""
+    if isinstance(value, list):
+        val = value[0] if value else None
+    else:
+        val = value
+    if val is None:
+        return ""
+    return str(val).strip().upper()
 
 def normalize_expiry_input(value):
     """Convert Excel date, datetime, text or serial values to a Python date."""
@@ -166,7 +167,6 @@ def normalize_expiry_input(value):
         return None
     if isinstance(value, dt):
         parsed_date = value.date()
-        # xlwings can return a blank date-formatted cell as the Excel epoch.
         if parsed_date <= date(1899, 12, 30):
             return None
         return parsed_date
@@ -176,8 +176,6 @@ def normalize_expiry_input(value):
         return value
     if isinstance(value, (int, float, np.integer, np.floating)):
         try:
-            # Excel may return 0 for a blank date-formatted cell. Serial
-            # zero is 30-12-1899, not a usable option expiry.
             serial = float(value)
             if not np.isfinite(serial) or serial <= 0:
                 return None
@@ -198,7 +196,6 @@ def normalize_expiry_input(value):
             return None
     return None
 
-
 def resolve_option_expiry(df_instrument, symbol, requested_expiry):
     """Keep a valid requested expiry, otherwise choose the nearest upcoming expiry."""
     rows = df_instrument[
@@ -214,7 +211,6 @@ def resolve_option_expiry(df_instrument, symbol, requested_expiry):
     if requested_expiry in available:
         return requested_expiry
     return min(available) if available else None
-
 
 def expiry_not_found_message(df_instrument, symbol, expiry_input):
     """Explain a rejected expiry: show the date entered and the valid upcoming expiries."""
@@ -232,7 +228,6 @@ def expiry_not_found_message(df_instrument, symbol, expiry_input):
     except Exception:
         return base
 
-
 def is_excel_busy_error(error):
     """Return True for transient Excel/OLE automation-busy errors."""
     message = str(error).lower()
@@ -242,31 +237,21 @@ def is_excel_busy_error(error):
         "0x8001010a", "-2147417846",
     ))
 
-
 def is_excel_connection_lost():
     """Connection state belongs to the calling worker thread."""
     return bool(getattr(_excel_com_state, "connection_lost", False))
-
 
 def _notify_excel_workbook_reconnected():
     """Signal one workbook-recovery event, coalescing worker-thread rebinds."""
     global EXCEL_RECONNECT_GENERATION, _LAST_EXCEL_RECONNECT_SIGNAL
     now = _monotonic()
     with EXCEL_RECONNECT_EVENT_LOCK:
-        # Several workers can independently rebind after one Excel restart.
-        # Coalesce those notices so the terminal performs one replay, not many.
         if now - _LAST_EXCEL_RECONNECT_SIGNAL >= 10.0:
             EXCEL_RECONNECT_GENERATION += 1
             _LAST_EXCEL_RECONNECT_SIGNAL = now
 
-
 def get_terminal_workbook():
-    """Get a thread-local workbook proxy attached to the already-open workbook.
-
-    xlwings COM objects must not be passed between worker threads. Cache one
-    workbook proxy per thread, validate it in that same COM apartment, and
-    only report reconnection after this thread has actually recovered.
-    """
+    """Get a thread-local workbook proxy attached to the already-open workbook."""
     ensure_excel_com_initialized()
     target_path = os.path.normcase(os.path.abspath(TerminalSheetName))
     workbook = getattr(_excel_com_state, "workbook", None)
@@ -295,7 +280,6 @@ def get_terminal_workbook():
                         book_path = os.path.normcase(os.path.abspath(book.fullname))
                         if book_path != target_path:
                             continue
-                        # Validate the candidate in this worker before caching it.
                         _ = book.sheets[0].name
                         matches.append(book)
                     except Exception as book_error:
@@ -322,11 +306,6 @@ def get_terminal_workbook():
             _notify_excel_workbook_reconnected()
         return workbook
 
-    # Recovery: Excel may have been restarted as a new COM server after a
-    # crash. A worker's old COM apartment cannot reuse its dead workbook proxy.
-    # Serialize rebinding attempts so the health monitor and data workers do
-    # not race to open the same file. Only try when an Excel instance is
-    # already running; this avoids starting Excel from a background worker.
     if getattr(_excel_com_state, "connection_lost", False):
         with EXCEL_RECONNECT_LOCK:
             try:
@@ -337,8 +316,6 @@ def get_terminal_workbook():
                 running_apps = []
 
             if running_apps:
-                # Recheck inside the lock: another worker may already have
-                # reopened the workbook while this worker was waiting.
                 for app in running_apps:
                     try:
                         for book in app.books:
@@ -363,8 +340,6 @@ def get_terminal_workbook():
                             raise
                         continue
 
-                # Only open when the workbook is genuinely absent from all
-                # running Excel instances. This prevents duplicate workbook tabs.
                 for app in running_apps:
                     try:
                         workbook = app.books.open(TerminalSheetName)
@@ -386,11 +361,6 @@ def get_terminal_workbook():
                     _excel_com_state.reconnect_error_reported = True
 
             if _excel_com_state.workbook is None:
-                # Reached when no Excel process exists (typical after a crash)
-                # OR a dead/hung Excel process is still listed but could not
-                # open the workbook. Relaunch Excel and open the workbook. The
-                # cooldown stops a failing launch from spawning Excel windows
-                # every 8 seconds.
                 global _LAST_EXCEL_RELAUNCH
                 now = _monotonic()
                 if _LAST_EXCEL_RELAUNCH == 0.0 or now - _LAST_EXCEL_RELAUNCH >= EXCEL_RELAUNCH_COOLDOWN_SEC:
@@ -413,8 +383,6 @@ def get_terminal_workbook():
                         _excel_com_state.workbook = None
                         print(f"Excel relaunch failed; will retry in {EXCEL_RELAUNCH_COOLDOWN_SEC}s: {relaunch_error}")
 
-    # First-time startup: use xlwings' path lookup. It attaches to the workbook
-    # if already open, or opens it on first startup if it is not open yet.
     if not getattr(_excel_com_state, "connection_lost", False):
         try:
             workbook = xw.Book(TerminalSheetName)
@@ -442,7 +410,6 @@ def get_terminal_workbook():
         _excel_com_state.disconnect_reported = True
     raise RuntimeError("VII_CLASS.xlsm is not available in this worker's Excel session.")
 
-
 def Text2Speech(Text):
     """Speak a message using one serialized Windows TTS engine."""
     global engine
@@ -464,10 +431,6 @@ def Text2Speech(Text):
     
 Text2Speech("Welcome to python trader trade terminal tool, have a nice day. Hope u r enjoying our work")
 
-
-
-
-
 def internet_is_available():
     """Check internet reachability independently of the broker WebSocket."""
     for host in ("1.1.1.1", "8.8.8.8"):
@@ -478,7 +441,6 @@ def internet_is_available():
         except OSError:
             continue
     return False
-
 
 def system_health_monitor():
     """Speak on internet or Excel workbook disconnect/recovery transitions."""
@@ -525,14 +487,11 @@ def system_health_monitor():
 
         sleep(8)
 
-
 def get_login_settings_sheet(workbook):
     """Use LOGIN as the single settings sheet and migrate legacy sheets once."""
     sheet_names = [sheet.name for sheet in workbook.sheets]
     login_sheet = workbook.sheets["LOGIN"] if "LOGIN" in sheet_names else workbook.sheets.add("LOGIN")
 
-    # Migrate the complete legacy Config used range to LOGIN starting at D1.
-    # Existing LOGIN credentials in columns A:B are left untouched.
     if str(login_sheet.range("C1").value or "") != "LOGIN_SETTINGS_MIGRATED_V1":
         if "Config" in sheet_names:
             try:
@@ -540,7 +499,6 @@ def get_login_settings_sheet(workbook):
                 print("Migrated Config sheet settings into LOGIN (starting at column D).")
             except Exception as exc:
                 raise RuntimeError(f"Could not migrate Config sheet into LOGIN: {exc}")
-        # Preserve legacy Telegram settings without relying on User_Credential.
         if "User_Credential" in sheet_names:
             legacy = workbook.sheets["User_Credential"]
             if not login_sheet.range("AZ2").value:
@@ -551,7 +509,6 @@ def get_login_settings_sheet(workbook):
         workbook.save()
 
     return login_sheet
-
 
 def _shoonya_login_once():
     global api, TelegramBotCredential, ReceiverTelegramID, BROKER_LOGIN_OK
@@ -614,8 +571,6 @@ def _shoonya_login_once():
         return isConnected
 
     except Exception as exc:
-        # Excel may briefly reject COM calls while recalculating, saving, or
-        # recovering after a forced close. Let the outer login retry handle it.
         if is_excel_busy_error(exc):
             raise
         print(f"Shoonya OAuth login error: {exc}")
@@ -626,7 +581,6 @@ def _shoonya_login_once():
         except Exception:
             pass
         return 0
-
 
 def Shoonya_login():
     """Retry transient Excel/OLE busy errors without requesting new credentials."""
@@ -653,26 +607,12 @@ def Shoonya_login():
             )
             sleep(wait_seconds)
 
-
-
-
 feed_opened = False
 SYMBOLDICT = {}
 live_data = {}
-# Keep every token subscribed during this API session so a re-opened
-# Shoonya WebSocket can restore the complete feed, including option strikes.
 SOCKET_SUBSCRIPTIONS = set()
-# Lifetime registry is for reconnect recovery. This second registry tracks
-# which tokens have actually been sent on the CURRENT WebSocket session.
 SOCKET_SESSION_SUBSCRIPTIONS = set()
-# Track subscription ownership so Excel deletions do not remove option-chain feeds.
-TERMINAL_SOCKET_SUBSCRIPTIONS = set()
-OPTION_CHAIN_SOCKET_SUBSCRIPTIONS = set()
-TERMINAL_DESIRED_SYMBOLS = set()
-TERMINAL_DESIRED_SYMBOLS_LOCK = Lock()
 SOCKET_SUBSCRIPTIONS_LOCK = Lock()
-# Serialize subscribe commands: reconnect restoration and newly added symbols
-# can otherwise write to the Shoonya WebSocket from different threads at once.
 SOCKET_SUBSCRIBE_SEND_LOCK = Lock()
 indicator_engine = IndicatorEngine()
 
@@ -689,15 +629,12 @@ def convert_to_float(item):
         return 0
 
 def SendMessageToTelegram(Message):
-    #print(f"SendMessageToTelegram = {Message}")
     global TelegramBotCredential, ReceiverTelegramID
     try:
         Url = "https://api.telegram.org/bot" + str(TelegramBotCredential) +  "/sendMessage?chat_id=" + str(ReceiverTelegramID)
-        
         textdata ={ "text":Message}
         response = requests.request("POST",Url,params=textdata)
     except Exception as e:
-        #print(f"SendMessageToTelegram exception occur : {e}")
         pass
 
 def _has_valid_live_ltp(quote):
@@ -710,11 +647,9 @@ def _has_valid_live_ltp(quote):
     except (TypeError, ValueError, OverflowError):
         return False
 
-
 def event_handler_quote_update(inmessage):
     global live_data, SYMBOLDICT
 
-    # Shoonya SDK versions may pass either a dict or a JSON-encoded message.
     if isinstance(inmessage, str):
         try:
             inmessage = json.loads(inmessage)
@@ -735,9 +670,6 @@ def event_handler_quote_update(inmessage):
         return
     key = exchange + "|" + token
 
-    # Track callback receipt separately from a usable LTP. Shoonya may first
-    # send a token acknowledgement/partial quote without lp; that is still
-    # evidence that the subscription reached this client.
     valid_quote_tick = _has_valid_live_ltp(message)
     with SUBSCRIPTION_DIAGNOSTIC_LOCK:
         if key in SUBSCRIPTION_DIAGNOSTIC_TOKENS:
@@ -752,8 +684,6 @@ def event_handler_quote_update(inmessage):
                 SUBSCRIPTION_CALLBACK_LOGGED.add(key)
                 print(f"SHOONYA FIRST VALID LTP for {key}: lp={message.get('lp')}")
 
-    # Keep quote ingestion short and independent from Excel/order workers.
-    # Merge partial quote fields, but never manufacture an LTP when it is absent.
     with LIVE_DATA_LOCK:
         symbol_info = dict(SYMBOLDICT.get(key, {}))
         symbol_info.update(message)
@@ -790,7 +720,7 @@ def _resubscribe_registered_tokens():
     if not feed_opened:
         return
     with SOCKET_SUBSCRIPTIONS_LOCK:
-        tokens = sorted(TERMINAL_SOCKET_SUBSCRIPTIONS | OPTION_CHAIN_SOCKET_SUBSCRIPTIONS)
+        tokens = sorted(SOCKET_SUBSCRIPTIONS)
     if not tokens:
         print("WebSocket reconnected; no previous quote subscriptions to restore.")
         return
@@ -799,15 +729,12 @@ def _resubscribe_registered_tokens():
     already_sent = 0
     queued = 0
     failed = 0
-    # Restore in small batches, following the proven reference terminal's
-    # ten-token batching pattern. The central send lock and per-session set
-    # still prevent duplicate sends during concurrent recovery/workbook scans.
     for offset in range(0, len(tokens), 10):
         if not feed_opened:
             break
         batch = tokens[offset:offset + 10]
         try:
-            result = subscribe_symbols_batch(batch, source=None)
+            result = subscribe_symbols_batch(batch)
             sent += result["sent"]
             already_sent += result["already_sent"]
             queued += result["queued"]
@@ -829,13 +756,9 @@ def open_callback():
     if was_open:
         return
 
-    # A new WebSocket connection has no active quote subscriptions. Keep the
-    # lifetime token list, but reset the per-connection send registry.
     with SOCKET_SUBSCRIPTIONS_LOCK:
         SOCKET_SESSION_SUBSCRIPTIONS.clear()
 
-    # Old quotes must not be used to place orders while the new socket is
-    # still restoring subscriptions. Fresh quote callbacks repopulate them.
     with LIVE_DATA_LOCK:
         live_data.clear()
         SYMBOLDICT.clear()
@@ -846,7 +769,6 @@ def open_callback():
         daemon=True,
         name="ShoonyaResubscribe"
     ).start()
-
 
 def event_handler_socket_closed():
     global feed_opened
@@ -901,8 +823,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     exchange = symbol[:3]
     
     if order_type == 'MARKET':
-        # Shoonya API does not permit MARKET orders. Convert to a LIMIT
-        # order at the supplied live LTP; never submit a zero-price order.
         if price is None:
             print(f"Live LIMIT order blocked for {tradingsymbol}: valid live LTP is unavailable.")
             return None
@@ -954,8 +874,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
                 round_to = .1
                 result = ( int(price / round_to) ) * round_to
                 price = float( "{:.1f}".format(result) )
-        
-        
+
     product_map = {"CNC": "C", "MIS": "I", "NRML": "M", "NORMAL": "M"}
     row_product = str(row_product_type or "").strip().upper()
     global_product = str(Product_type or "").strip().upper()
@@ -966,7 +885,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
             "in this row's Order Type cell or the global Order Type selector."
         )
         return None
-    # When a row has no override, show the inherited global product in its cell.
     if not row_product and display_row is not None:
         try:
             product_cell = get_live_trade_sheet(get_terminal_workbook()).range(f"N{int(display_row)}")
@@ -977,7 +895,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     product = product_map[selected_product_type]
     Message = "Order Details : buy_or_sell = " + str(buy_or_sell[0]) + ", product_type = " + str(product)+ ", exchange = " + str(exchange)+ ", tradingsymbol = " + str(tradingsymbol)+ ", quantity = " + str(quantity)+ ", price_type = " + str(price_type)+ ", price = " + str(price)+ ", trigger_price = " + str(trigger_price)
     logger.info(Message)
-    
     try:
         order_response = api.place_order(
             buy_or_sell=buy_or_sell[0],
@@ -998,7 +915,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
         print(Message)
         logger.error(Message)
         return None
-
     if not isinstance(order_response, dict):
         Message = (
             f"ORDER NOT CONFIRMED for {tradingsymbol}: Shoonya returned "
@@ -1007,7 +923,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
         print(Message)
         logger.error(Message)
         return None
-
     order_id = order_response.get("norenordno") or order_response.get("order_id")
     broker_stat = str(order_response.get("stat", "")).strip().lower()
     if not order_id or broker_stat in ("not_ok", "not ok", "error", "failed"):
@@ -1018,7 +933,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
         print(Message)
         logger.error(Message)
         return None
-
     Message = (
         f"Broker accepted order for {tradingsymbol} {quantity} quantity "
         f"{buy_or_sell}; order id: {order_id}"
@@ -1032,12 +946,6 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     return str(order_id)
 
 def get_order_book():
-    """Return the broker order book in the terminal's standard column layout.
-
-    A REST/API failure must return an empty DataFrame, never an
-    uninitialized local variable. This keeps order-book polling independent
-    from live quote updates and lets the next poll retry normally.
-    """
     standard_columns = [
         "Order No", "Status", "Exchange", "Trading Symbol", "Product Type",
         "Transaction Type", "Quantity", "Filled Shares", "Price",
@@ -1045,13 +953,11 @@ def get_order_book():
         "Order rejection reason", "Trigger Price",
     ]
     empty_order_book = pd.DataFrame(columns=standard_columns)
-
     try:
         raw_order_book = api.get_order_book()
         if raw_order_book is None:
             print("Shoonya get_order_book returned no data; will retry on next poll.")
             return empty_order_book
-
         if isinstance(raw_order_book, dict):
             broker_stat = str(raw_order_book.get("stat", "")).strip().lower()
             if broker_stat and broker_stat not in ("ok", "success"):
@@ -1067,11 +973,9 @@ def get_order_book():
             else:
                 print(f"Unexpected Shoonya order-book response: {raw_order_book}")
                 return empty_order_book
-
         df_order_book = pd.DataFrame(raw_order_book)
         if df_order_book.empty:
             return empty_order_book
-
         column_map = {
             "norenordno": "Order No",
             "status": "Status",
@@ -1091,14 +995,10 @@ def get_order_book():
             "trgprc": "Trigger Price",
         }
         df_order_book = df_order_book.rename(columns=column_map)
-
         if "Order No" in df_order_book.columns:
             df_order_book = df_order_book.sort_values(
                 by="Order No", kind="stable"
             ).reset_index(drop=True)
-
-        # Keep the familiar terminal columns first while retaining any
-        # additional fields returned by a newer Shoonya SDK.
         ordered_columns = [
             column for column in standard_columns
             if column in df_order_book.columns
@@ -1108,39 +1008,19 @@ def get_order_book():
             if column not in ordered_columns
         ]
         return df_order_book[ordered_columns + extra_columns]
-
     except Exception as exc:
         print(f"Exception occur in get_order_book : {exc}")
         return empty_order_book
 
-def _extract_symbol(value):
-    """Normalize a Trade_Terminal cell returned by xlwings to EXCHANGE:SYMBOL text.
-
-    xlwings normally returns a flat list for a one-column range, but wrappers,
-    mocked ranges and some recovery paths can provide nested list/tuple values.
-    Unwrap those safely instead of converting a list to its Python repr.
-    """
-    while isinstance(value, (list, tuple)):
-        if not value:
-            return ""
-        value = value[0]
-    if value is None:
-        return ""
-    return str(value).strip().upper()
-
-
 def GetToken_UsingSymbol(exchange, tradingsymbol):
-    """Resolve an exact exchange/trading-symbol match; never take searchscrip's first hit blindly."""
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
     global api
     exchange = str(exchange or "").strip().upper()
     tradingsymbol = str(tradingsymbol or "").strip().upper()
     if not exchange or not tradingsymbol:
         raise ValueError("Exchange and trading symbol are required to resolve an instrument token.")
-
     if exchange == "BSE" and tradingsymbol in IndexList:
         return Token_list[tradingsymbol]
-
     master_by_exchange = {
         "NSE": df_ins_NSE, "BSE": df_ins_BSE, "NFO": df_ins_NFO,
         "BFO": df_ins_BFO, "CDS": df_ins_CDS, "MCX": df_ins_MCX,
@@ -1154,35 +1034,27 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
             token = str(matches.iloc[0]["Token"]).strip()
             if token and token.lower() != "nan":
                 return token
-
-    # Instrument-master fallback: accept only an exact tsym match from Shoonya.
-    response = api.searchscrip(exchange=exchange, searchtext=tradingsymbol)
-    values = response.get("values", []) if isinstance(response, dict) else []
-    exact_matches = [
-        item for item in values
-        if str(item.get("tsym") or "").strip().upper() == tradingsymbol
-        and str(item.get("token") or "").strip()
-    ]
-    if not exact_matches:
-        candidates = [
-            f"{item.get('tsym')} (token {item.get('token')})"
-            for item in values[:5]
+        response = api.searchscrip(exchange=exchange, searchtext=tradingsymbol)
+        values = response.get("values", []) if isinstance(response, dict) else []
+        exact_matches = [
+            item for item in values
+            if str(item.get("tsym") or "").strip().upper() == tradingsymbol
+            and str(item.get("token") or "").strip()
         ]
-        raise ValueError(
-            f"No exact instrument-master match for {exchange}:{tradingsymbol}. "
-            f"Search candidates: {', '.join(candidates) or 'none'}"
-        )
-    token = str(exact_matches[0]["token"]).strip()
-    print(f"Instrument-master fallback verified: {exchange}:{tradingsymbol} -> {token}")
-    return token
+        if not exact_matches:
+            candidates = [
+                f"{item.get('tsym')} (token {item.get('token')})"
+                for item in values[:5]
+            ]
+            raise ValueError(
+                f"No exact instrument-master match for {exchange}:{tradingsymbol}. "
+                f"Search candidates: {', '.join(candidates) or 'none'}"
+            )
+        token = str(exact_matches[0]["token"]).strip()
+        print(f"Instrument-master fallback verified: {exchange}:{tradingsymbol} -> {token}")
+        return token
 
-def subscribe_symbol(token_key, force=False, source="terminal"):
-    """
-    The only function allowed to send Shoonya market-data subscriptions.
-
-    Tokens are retained in SOCKET_SUBSCRIPTIONS even when the socket is down,
-    and are sent at most once per live socket session unless force=True.
-    """
+def subscribe_symbol(token_key, force=False):
     global api
     token_key = str(token_key or "").strip().upper()
     if "|" not in token_key:
@@ -1190,39 +1062,23 @@ def subscribe_symbol(token_key, force=False, source="terminal"):
     exchange, token = token_key.split("|", 1)
     if not exchange or not token:
         raise ValueError(f"Invalid Shoonya token key {token_key!r}")
-
-    # Always queue the token first. A disconnect between symbol resolution
-    # and the send must not lose the requested instrument.
     with SOCKET_SUBSCRIPTIONS_LOCK:
         SOCKET_SUBSCRIPTIONS.add(token_key)
-        if source == "option_chain":
-            OPTION_CHAIN_SOCKET_SUBSCRIPTIONS.add(token_key)
-        elif source == "terminal":
-            TERMINAL_SOCKET_SUBSCRIPTIONS.add(token_key)
-
     if not feed_opened:
         print(f"Queued {token_key}; Shoonya WebSocket is not open yet.")
         return "queued"
-
     with SOCKET_SUBSCRIBE_SEND_LOCK:
-        # The socket can close while this thread waits for the send lock.
         if not feed_opened:
             print(f"Queued {token_key}; WebSocket closed before the send.")
             return "queued"
-
         with SOCKET_SUBSCRIPTIONS_LOCK:
             sent_this_session = token_key in SOCKET_SESSION_SUBSCRIPTIONS
-        if sent_this_session and not force:
-            return "already_sent"
-
+            if sent_this_session and not force:
+                return "already_sent"
         with SUBSCRIPTION_DIAGNOSTIC_LOCK:
             SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(token_key)
             SUBSCRIPTION_CALLBACK_LOGGED.discard(token_key)
             SUBSCRIPTION_CALLBACK_SEEN.discard(token_key)
-
-        # Shoonya's subscribe API is asynchronous. A successful local return
-        # means only that the SDK accepted the send call, not that the server
-        # acknowledged the instrument or delivered a quote.
         subscribe_result = api.subscribe([token_key])
         if isinstance(subscribe_result, dict):
             response_status = str(subscribe_result.get("stat", "")).strip().lower()
@@ -1230,16 +1086,13 @@ def subscribe_symbol(token_key, force=False, source="terminal"):
                 raise RuntimeError(
                     f"Shoonya rejected subscribe {token_key}: {subscribe_result}"
                 )
-            if subscribe_result:
-                print(f"Shoonya subscribe response for {token_key}: {subscribe_result}")
-
+        if subscribe_result:
+            print(f"Shoonya subscribe response for {token_key}: {subscribe_result}")
         with SOCKET_SUBSCRIPTIONS_LOCK:
             SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
         return "sent"
 
-
-def subscribe_symbols_batch(token_keys, force=False, source="terminal"):
-    """Send a small batch of EXCHANGE|TOKEN subscriptions safely."""
+def subscribe_symbols_batch(token_keys, force=False):
     global api
     normalized = []
     for item in token_keys:
@@ -1250,18 +1103,11 @@ def subscribe_symbols_batch(token_keys, force=False, source="terminal"):
         if not exchange or not token:
             raise ValueError(f"Invalid Shoonya token key {key!r}")
         normalized.append(key)
-
-    # Preserve insertion order while removing duplicates.
     normalized = list(dict.fromkeys(normalized))
     with SOCKET_SUBSCRIPTIONS_LOCK:
         SOCKET_SUBSCRIPTIONS.update(normalized)
-        if source == "terminal":
-            TERMINAL_SOCKET_SUBSCRIPTIONS.update(normalized)
-        elif source == "option_chain":
-            OPTION_CHAIN_SOCKET_SUBSCRIPTIONS.update(normalized)
     if not feed_opened:
         return {"sent": 0, "already_sent": 0, "queued": len(normalized)}
-
     with SOCKET_SUBSCRIBE_SEND_LOCK:
         if not feed_opened:
             return {"sent": 0, "already_sent": 0, "queued": len(normalized)}
@@ -1269,15 +1115,13 @@ def subscribe_symbols_batch(token_keys, force=False, source="terminal"):
             batch = [key for key in normalized
                      if force or key not in SOCKET_SESSION_SUBSCRIPTIONS]
             already = len(normalized) - len(batch)
-        if not batch:
-            return {"sent": 0, "already_sent": already, "queued": 0}
-
+            if not batch:
+                return {"sent": 0, "already_sent": already, "queued": 0}
         with SUBSCRIPTION_DIAGNOSTIC_LOCK:
             for key in batch:
                 SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(key)
                 SUBSCRIPTION_CALLBACK_LOGGED.discard(key)
                 SUBSCRIPTION_CALLBACK_SEEN.discard(key)
-
         result = api.subscribe(batch)
         if isinstance(result, dict):
             status = str(result.get("stat", "")).strip().lower()
@@ -1287,25 +1131,14 @@ def subscribe_symbols_batch(token_keys, force=False, source="terminal"):
             SOCKET_SESSION_SUBSCRIPTIONS.update(batch)
         return {"sent": len(batch), "already_sent": already, "queued": 0}
 
-
-def subscribe_new_token(exchange, Token, force=False, source="terminal"):
-    """Backward-compatible wrapper; all callers use the central send path."""
+def subscribe_new_token(exchange, Token, force=False):
     token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
-    return subscribe_symbol(token_key, force=force, source=source)
-
+    return subscribe_symbol(token_key, force=force)
 
 def _watch_new_symbol_subscription(symbol, exchange, token):
-    """Verify that a newly subscribed symbol produces a real WebSocket tick.
-
-    If no tick arrives, resend only the market-feed subscription. This check
-    deliberately does not call REST quote APIs or write synthetic quote data.
-    """
     token_key = f"{exchange}|{token}"
     try:
         for attempt in range(5):
-            with TERMINAL_DESIRED_SYMBOLS_LOCK:
-                if symbol not in TERMINAL_DESIRED_SYMBOLS:
-                    return
             sleep(3.0)
             with LIVE_DATA_LOCK:
                 quote_snapshot = dict(live_data.get(token_key, {}))
@@ -1315,11 +1148,9 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
                     f"({token_key}): {quote_snapshot.get('lp')}"
                 )
                 return
-
             if not feed_opened:
                 print(f"Waiting for WebSocket reconnection to receive {symbol} ({token_key}).")
                 continue
-
             if attempt < 4:
                 print(
                     f"No WebSocket tick for {symbol} ({token_key}); "
@@ -1329,12 +1160,9 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
                     subscribe_new_token(exchange, token, force=True)
                 except Exception as exc:
                     print(f"Subscription retry failed for {symbol} ({token_key}): {exc}")
-
         with LIVE_DATA_LOCK:
             received = _has_valid_live_ltp(dict(live_data.get(token_key, {})))
         if not received:
-            # Read-only REST probe: confirms whether this exact exchange/token
-            # resolves to the requested symbol. Never writes REST data to live_data.
             try:
                 quote_probe = api.get_quotes(exchange=exchange, token=str(token))
                 if isinstance(quote_probe, dict):
@@ -1377,9 +1205,9 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
                     print(f"SHOONYA REST TOKEN CHECK for {symbol} ({token_key}): {quote_probe!r}")
             except Exception as probe_error:
                 print(f"SHOONYA REST TOKEN CHECK failed for {symbol} ({token_key}): {probe_error}")
-            with SUBSCRIPTION_DIAGNOSTIC_LOCK:
-                callback_seen = token_key in SUBSCRIPTION_CALLBACK_SEEN
-                valid_ltp_seen = token_key in SUBSCRIPTION_CALLBACK_LOGGED
+        with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+            callback_seen = token_key in SUBSCRIPTION_CALLBACK_SEEN
+            valid_ltp_seen = token_key in SUBSCRIPTION_CALLBACK_LOGGED
             print(
                 f"WARNING: {symbol} ({token_key}) has no valid WebSocket LTP after "
                 f"four subscription retries; callback_seen={callback_seen}, "
@@ -1389,26 +1217,14 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
         print(f"Subscription watchdog error for {symbol} ({token_key}): {exc}")
 
 LimitOrderBook = {}
-
-# Side-specific order display is independent of the hidden trade-state engine.
 SIDE_ORDER_TRACKER = {}
 SIDE_ORDER_TRACKER_LOCK = Lock()
 SIDE_ORDER_UPDATES = {}
-# Per-row/per-side command latch. A visible BUY/SELL command is submitted once;
-# clearing the cell rearms that side. Accepted IDs also protect across restarts.
-SIDE_TRIGGER_STATE = {}
-SIDE_TRIGGER_STATE_LOCK = Lock()
-
-# Manual BUY/SELL requests run outside the market-data/Excel refresh loop.
-# Multiple workers ensure one slow broker request cannot hold up other symbols.
 SIDE_ORDER_EXECUTOR = ThreadPoolExecutor(
     max_workers=64, thread_name_prefix="ShoonyaSideOrder"
 )
 
-
-
 def register_side_order_display(symbol, side, order_id, display_row=None):
-    """Write the order ID into the exact triggering row; symbol lookup is only a fallback."""
     try:
         side = str(side).strip().upper()
         if side not in ("BUY", "SELL"):
@@ -1420,11 +1236,11 @@ def register_side_order_display(symbol, side, order_id, display_row=None):
             symbols = sheet.range("A4:A1000").value
             row_number = next(
                 (row_index + 4 for row_index, value in enumerate(symbols)
-                 if _extract_symbol(value) == str(symbol).strip().upper()),
+                if _extract_symbol(value) == str(symbol).strip().upper()),
                 None,
             )
         else:
-            actual_symbol = _extract_symbol(sheet.range(f"A{row_number}").value)
+            actual_symbol = str(sheet.range(f"A{row_number}").value or "").strip()
             if actual_symbol != str(symbol).strip():
                 raise ValueError(
                     f"Order row mismatch: row {row_number} contains {actual_symbol!r}, "
@@ -1441,80 +1257,72 @@ def register_side_order_display(symbol, side, order_id, display_row=None):
             SIDE_ORDER_TRACKER[str(order_id)] = {
                 "row": row_number, "side": side, "symbol": str(symbol),
             }
-            early_update = SIDE_ORDER_UPDATES.get(str(order_id))
+        early_update = SIDE_ORDER_UPDATES.get(str(order_id))
         if early_update:
             update_side_order_display(
                 str(order_id), early_update.get("status"),
                 early_update.get("executed_price"), early_update.get("remarks")
             )
-            if str(order_id) in LimitOrderBook:
-                LimitOrderBook[str(order_id)].update({
-                    "status": early_update.get("status", "PENDING"),
-                    "Executed_price": early_update.get("executed_price"),
-                    "Remarks": early_update.get("remarks"),
-                })
+        if str(order_id) in LimitOrderBook:
+            LimitOrderBook[str(order_id)].update({
+                "status": early_update.get("status", "PENDING"),
+                "Executed_price": early_update.get("executed_price"),
+                "Remarks": early_update.get("remarks"),
+            })
     except Exception as exc:
         print(f"Could not update {side} order display for {symbol}: {exc}")
 
-
 def update_side_order_display(order_id, status, executed_price=None, remarks=None):
-    """Reflect broker-confirmed status/fill in the matching side-specific columns."""
     try:
         with SIDE_ORDER_TRACKER_LOCK:
             tracked = SIDE_ORDER_TRACKER.get(str(order_id))
-        if not tracked:
-            return
-        row_number = tracked["row"]
-        if tracked["side"] == "BUY":
-            status_col, price_col = "S", "T"
-        else:
-            status_col, price_col = "Y", "Z"
-        sheet = get_live_trade_sheet(get_terminal_workbook())
-        display_status = str(status or "").strip().upper()
-        if not display_status or display_status == "PENDING":
-            display_status = "PENDING"
-        sheet.range(f"{status_col}{row_number}").value = display_status
-        # Shoonya avgprc is meaningful for both partial and complete fills.
-        if executed_price not in (None, "", 0, "0"):
-            try:
-                if float(executed_price) > 0:
-                    sheet.range(f"{price_col}{row_number}").value = float(executed_price)
-            except (TypeError, ValueError):
-                pass
-        if (display_status.startswith("REJECTED") or display_status.startswith("CANCELLED")
+            if not tracked:
+                return
+            row_number = tracked["row"]
+            if tracked["side"] == "BUY":
+                status_col, price_col = "S", "T"
+            else:
+                status_col, price_col = "Y", "Z"
+            sheet = get_live_trade_sheet(get_terminal_workbook())
+            display_status = str(status or "").strip().upper()
+            if not display_status or display_status == "PENDING":
+                display_status = "PENDING"
+            sheet.range(f"{status_col}{row_number}").value = display_status
+            if executed_price not in (None, "", 0, "0"):
+                try:
+                    if float(executed_price) > 0:
+                        sheet.range(f"{price_col}{row_number}").value = float(executed_price)
+                except (TypeError, ValueError):
+                    pass
+            if (display_status.startswith("REJECTED") or display_status.startswith("CANCELLED")
                 or display_status.startswith("CANCELED")) and remarks:
-            reason_text = str(remarks).strip()
-            if reason_text and reason_text.upper() not in display_status:
-                sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {reason_text}"
+                reason_text = str(remarks).strip()
+                if reason_text and reason_text.upper() not in display_status:
+                    sheet.range(f"{status_col}{row_number}").value = f"{display_status}: {reason_text}"
     except Exception as exc:
         print(f"Could not refresh side order {order_id}: {exc}")
+
 def register_pending_order(order_id):
-    """Add a local pending placeholder without overwriting an earlier broker push update."""
     key = str(order_id)
     with SIDE_ORDER_TRACKER_LOCK:
         early = SIDE_ORDER_UPDATES.get(key)
-    if early:
-        LimitOrderBook[key] = {
-            "status": early.get("status", "PENDING"),
-            "Remarks": early.get("remarks"),
-            "Executed_price": early.get("executed_price"),
-        }
-    else:
-        LimitOrderBook[key] = {
-            "status": "PENDING", "Remarks": None, "Executed_price": None
-        }
-
+        if early:
+            LimitOrderBook[key] = {
+                "status": early.get("status", "PENDING"),
+                "Remarks": early.get("remarks"),
+                "Executed_price": early.get("executed_price"),
+            }
+        else:
+            LimitOrderBook[key] = {
+                "status": "PENDING", "Remarks": None, "Executed_price": None
+            }
 
 def _is_terminal_trigger(value, side):
-    """Accept an explicit BUY/SELL command or a truthy Excel trigger value."""
     if value is None:
         return False
     return str(value).strip().upper() in (side, "TRUE", "1", "YES", "ON")
 
-
-
 def _required_positive_number(value, field_name):
-    """Parse a required positive order input without ever calling float(None)."""
     if value is None or (isinstance(value, str) and not value.strip()):
         raise ValueError(f"{field_name} is blank")
     try:
@@ -1525,32 +1333,25 @@ def _required_positive_number(value, field_name):
         raise ValueError(f"{field_name} must be greater than zero")
     return number
 
-
 def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
-                                  market_type, limit_price, ltp):
-    """Submit one side order on a worker thread; never block the quote refresh loop."""
+                                 market_type, limit_price, ltp):
     pythoncom = None
     try:
-        # xlwings uses COM on Windows; initialize COM for this worker when available.
         try:
             import pythoncom
             pythoncom.CoInitialize()
         except Exception:
             pythoncom = None
-
         sheet = get_live_trade_sheet(get_terminal_workbook())
         id_col, status_col = ("R", "S") if side == "BUY" else ("X", "Y")
         sheet.range(f"{status_col}{row_number}").value = "SUBMITTING"
-
         quantity_value = _required_positive_number(qty, "Quantity")
         if not quantity_value.is_integer():
             raise ValueError("Quantity must be a whole number")
         quantity = int(quantity_value)
-
         product_type = str(product_type or "").strip().upper()
         if product_type not in ("MIS", "CNC", "NRML"):
             raise ValueError("Select a valid Product Type: MIS, CNC or NRML")
-
         market_type = str(market_type or "").strip().upper()
         if market_type == "MARKET":
             broker_order_type = "LIMIT"
@@ -1563,7 +1364,6 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             order_price = _required_positive_number(limit_price, "Trigger Price")
         else:
             raise ValueError("Select MARKET, LIMIT or SL-LMT in the BUY/SELL type cell")
-
         order_id = place_trade(
             symbol, quantity, side, broker_order_type, order_price,
             product_type, display_row=row_number
@@ -1572,13 +1372,10 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             sheet.range(f"{status_col}{row_number}").value = "SUBMISSION FAILED/UNCONFIRMED"
             print(f"{side} order for {symbol} was not confirmed; check Shoonya OrderBook before retrying.")
             return
-
         register_pending_order(order_id)
         sheet.range(f"{id_col}{row_number}").number_format = "@"
         sheet.range(f"{id_col}{row_number}").value = str(order_id)
         print(f"{side} order worker completed for {symbol}: {order_id}")
-        # The BUY/SELL command cell is deliberately not cleared.
-
     except Exception as exc:
         try:
             sheet = get_live_trade_sheet(get_terminal_workbook())
@@ -1594,25 +1391,18 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
         except Exception:
             pass
 
-
 def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_type,
-                                market_type, limit_price, ltp):
-    """Latch a row/side command and queue it without waiting for the broker."""
+                                 market_type, limit_price, ltp):
     side = str(side).strip().upper()
     trigger_col = "O" if side == "BUY" else "U"
     id_col, status_col, price_col = (("R", "S", "T") if side == "BUY"
-                                    else ("X", "Y", "Z"))
+                                     else ("X", "Y", "Z"))
     key = (int(row_number), side)
     trigger = sheet.range(f"{trigger_col}{row_number}").value
-
     if not _is_terminal_trigger(trigger, side):
         with SIDE_TRIGGER_STATE_LOCK:
             SIDE_TRIGGER_STATE[key] = {"armed": False}
         return
-
-    # Users may enter BUY/SELL before completing the other cells. Do not latch
-    # or submit an incomplete command; keep checking until every required
-    # input (and a fresh LTP for MARKET) is available.
     try:
         _required_positive_number(qty, "Quantity")
         if str(product_type or "").strip().upper() not in ("MIS", "CNC", "NRML"):
@@ -1631,15 +1421,11 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
         if str(sheet.range(f"{status_col}{row_number}").value or "") != waiting_message:
             sheet.range(f"{status_col}{row_number}").value = waiting_message
         return
-
     with SIDE_TRIGGER_STATE_LOCK:
         state = SIDE_TRIGGER_STATE.get(key)
         if state is None:
             existing_id = sheet.range(f"{id_col}{row_number}").value
             existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
-            # A WAITING message is only an incomplete user input, not a
-            # previously submitted order. Allow the command to queue once the
-            # user finishes the missing fields.
             if existing_id not in (None, "") or (
                 existing_status and not existing_status.upper().startswith("WAITING:")
             ):
@@ -1647,16 +1433,12 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
                 return
             state = {"armed": False}
             SIDE_TRIGGER_STATE[key] = state
-
         if state.get("armed"):
             return
-
-        # Clear old result fields only after the user clears and re-enters the command.
         sheet.range(f"{id_col}{row_number}").value = None
         sheet.range(f"{status_col}{row_number}").value = "QUEUED"
         sheet.range(f"{price_col}{row_number}").value = None
         SIDE_TRIGGER_STATE[key] = {"armed": True, "queued": True}
-
     try:
         SIDE_ORDER_EXECUTOR.submit(
             _execute_terminal_side_order,
@@ -1667,12 +1449,8 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
         sheet.range(f"{status_col}{row_number}").value = "QUEUE ERROR: " + str(exc)
         print(f"Could not queue {side} order for {symbol}: {exc}")
 
-
 def get_live_trade_sheet(workbook):
-    """Return the terminal sheet without mistaking transient COM errors for a missing sheet."""
     with LIVE_TRADE_SHEET_LOCK:
-        # Read the collection once. COM/OLE failures must propagate to the
-        # caller's recovery loop; they must never trigger a worksheet rename.
         sheet_names = [sheet.name for sheet in workbook.sheets]
         if "LIVE_TRADE" in sheet_names:
             return workbook.sheets["LIVE_TRADE"]
@@ -1688,20 +1466,16 @@ def get_live_trade_sheet(workbook):
             "Neither LIVE_TRADE nor Trade_Terminal worksheet exists in VII_CLASS.xlsm."
         )
 
-
 def start_Trade_Terminal():
-    #print("I am inside start_Trade_Terminal")
     global api, live_data, BROKER_LOGIN_OK
     global SYMBOLDICT
     global Product_type
     global Trade_Mode
-    global Telegram_Message, Voice_Message    
+    global Telegram_Message, Voice_Message
     global subs_lst
     excel_TT = get_terminal_workbook()
     tt = get_live_trade_sheet(excel_TT)
 
-    # Migrate once to the requested BUY/SELL grouped layout.
-    # The legacy Entry/Exit state machine is retained in hidden BA:BS columns.
     internal_marker = str(tt.range("BA3").value or "").strip()
     if internal_marker != "__PT_INTERNAL_QTY":
         legacy_headers = tt.range("M3:AE3").value
@@ -1711,7 +1485,6 @@ def start_Trade_Terminal():
         old_indicator_headers_al = [str(v or "").strip().upper() for v in (tt.range("AL3:AS3").value or [])]
         old_side_rows = tt.range("AF4:AK1000").value if old_side_headers and old_side_headers[0] == "BUY ORDER ID" else None
 
-        # Preserve all 19 legacy engine fields without exposing them in the new UI.
         tt.range("M3:AE1000").copy(destination=tt.range("BA3:BS1000"))
         tt.range("BA3:BS3").value = [
             "__PT_INTERNAL_QTY", "Internal BUY Trigger", "Internal SELL Trigger",
@@ -1723,7 +1496,6 @@ def start_Trade_Terminal():
             "Internal Product Type"
         ]
 
-        # Read the original indicator block before writing the new visible headers.
         if old_indicator_headers_al[0:1] == ["RSI"]:
             indicator_values = tt.range("AL3:AS1000").value
         elif old_indicator_headers_af[0:1] == ["RSI"]:
@@ -1731,7 +1503,6 @@ def start_Trade_Terminal():
         else:
             indicator_values = None
 
-        # Visible controls: Qty, product, BUY trigger/type/price, SELL trigger/type/price.
         tt.range("N4:N1000").value = [
             (str(row[18]).strip().upper() if len(row) > 18 and str(row[18] or "").strip().upper() in ("CNC", "MIS", "NRML") else None)
             for row in legacy_rows
@@ -1743,12 +1514,10 @@ def start_Trade_Terminal():
         tt.range("V4:V1000").value = [row[3] if len(row) > 3 else None for row in legacy_rows]
         tt.range("W4:W1000").value = [row[4] if len(row) > 4 else None for row in legacy_rows]
 
-        # Carry forward side-specific IDs/statuses from the immediately previous layout, if present.
         if old_side_rows is not None:
             tt.range("R4:T1000").value = [[r[0], r[1], r[2]] for r in old_side_rows]
             tt.range("X4:Z1000").value = [[r[3], r[4], r[5]] for r in old_side_rows]
 
-        # Carry forward trade management and indicator values.
         tt.range("AA4:AF1000").value = [
             [row[12] if len(row) > 12 else None,
              row[13] if len(row) > 13 else None,
@@ -1762,7 +1531,6 @@ def start_Trade_Terminal():
             tt.range("AG3:AN1000").value = indicator_values
         print("Migrated LIVE_TRADE to the grouped BUY/SELL layout; legacy trade state preserved in hidden BA:BS.")
 
-    # Explicit headers keep every displayed value under its matching action.
     tt.range("M3:AF3").value = [
         "Qty", "Order Type", "BUY", "BUY Market Type", "BUY Limit Price",
         "BUY ID", "BUY Status", "BUY Executed Price",
@@ -1813,7 +1581,6 @@ def start_Trade_Terminal():
     
     AlertMessage = Trade_Mode + " trade mode enabled"
     Telegram_Message.append(AlertMessage)
-    # Trade-mode announcement is not spoken; system alerts remain enabled.
     
     Symbol_Token = {}
     terminal_subscribed = set()
@@ -1824,111 +1591,48 @@ def start_Trade_Terminal():
     last_excel_reconnect_generation = EXCEL_RECONNECT_GENERATION
     from concurrent.futures import ThreadPoolExecutor
     subscription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="SymbolSubscribe")
-    # Bound watchdog concurrency: do not create one operating-system thread
-    # for every row when a large symbol list is pasted into Excel.
     feed_watchdog_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="FeedWatchdog")
 
-    def subscribe_symbol_in_background(symbols):
-        """Resolve pending terminal symbols and send WebSocket subscriptions in batches of ten."""
-        resolved = []
-        for raw_symbol in symbols:
-            symbol = str(raw_symbol).strip().upper()
-            try:
-                if len(symbol) < 6 or symbol[3] != ":":
-                    raise ValueError(
-                        f"Expected symbol format EXCHANGE:TRADINGSYMBOL, received {symbol!r}"
-                    )
-                exchange = symbol[:3]
-                tradingsymbol = symbol[4:]
-                token = GetToken_UsingSymbol(exchange, tradingsymbol)
-                if token is None or str(token).strip() == "":
-                    raise ValueError(f"No instrument token found for {symbol}")
-                if not BROKER_LOGIN_OK:
-                    raise RuntimeError(
-                        "Shoonya REST session is not validated; refusing market-feed subscription."
-                    )
-                token_key = exchange + "|" + str(token)
-                with TERMINAL_DESIRED_SYMBOLS_LOCK:
-                    if symbol not in TERMINAL_DESIRED_SYMBOLS:
-                        continue
-                with subscription_lock:
-                    force_resubscribe = symbol in force_resubscribe_symbols
-                Symbol_Token[symbol] = token_key
-                resolved.append((symbol, exchange, token, token_key, force_resubscribe))
-            except Exception as exc:
-                print(f"Subscribe error {symbol}: {exc}")
-                with subscription_lock:
-                    subscription_retry_after[symbol] = _monotonic() + 5.0
-                    subscription_pending.discard(symbol)
-
-        # Keep normal initial/dynamic subscriptions aligned with the reference
-        # terminal: ten instruments per WebSocket send, with a short pause.
-        for offset in range(0, len(resolved), 10):
-            batch = resolved[offset:offset + 10]
-            if not batch:
-                continue
-            token_keys = [item[3] for item in batch]
-            force_batch = any(item[4] for item in batch)
-            try:
-                result = subscribe_symbols_batch(token_keys, force=force_batch)
-                if result["queued"]:
-                    print(
-                        f"Queued {len(batch)} symbol subscriptions; "
-                        "Shoonya WebSocket is not open yet."
-                    )
-                else:
-                    print(
-                        f"Sent symbol subscription batch "
-                        f"{offset // 10 + 1}: {result['sent']} sent, "
-                        f"{result['already_sent']} already sent."
-                    )
-                for symbol, exchange, token, token_key, force_resubscribe in batch:
-                    with subscription_lock:
-                        if force_resubscribe:
-                            force_resubscribe_symbols.discard(symbol)
-                        terminal_subscribed.add(symbol)
-                    print(
-                        f"Symbol = {symbol}, Token={token} subscription queued/sent; "
-                        "waiting for first WebSocket tick"
-                    )
-                    feed_watchdog_executor.submit(
-                        _watch_new_symbol_subscription, symbol, exchange, token
-                    )
-            except Exception as batch_error:
-                print(
-                    f"Subscription batch failed "
-                    f"({token_keys[0]} .. {token_keys[-1]}): {batch_error}. "
-                    "Trying individual recovery sends."
+    def subscribe_symbol_in_background(symbol):
+        try:
+            symbol = str(symbol).strip().upper()
+            if len(symbol) < 6 or symbol[3] != ":":
+                raise ValueError(f"Expected symbol format EXCHANGE:TRADINGSYMBOL, received {symbol!r}")
+            exchange = symbol[:3]
+            tradingsymbol = symbol[4:]
+            token = GetToken_UsingSymbol(exchange, tradingsymbol)
+            if token is None or str(token).strip() == "":
+                raise ValueError(f"No instrument token found for {symbol}")
+            token_key = exchange + "|" + str(token)
+            if not BROKER_LOGIN_OK:
+                raise RuntimeError(
+                    "Shoonya REST session is not validated; refusing market-feed subscription."
                 )
-                for symbol, exchange, token, token_key, force_resubscribe in batch:
-                    try:
-                        subscribe_new_token(exchange, token, force=force_resubscribe)
-                        with subscription_lock:
-                            if force_resubscribe:
-                                force_resubscribe_symbols.discard(symbol)
-                            terminal_subscribed.add(symbol)
-                        feed_watchdog_executor.submit(
-                            _watch_new_symbol_subscription, symbol, exchange, token
-                        )
-                    except Exception as individual_error:
-                        Symbol_Token.pop(symbol, None)
-                        print(
-                            f"Subscribe recovery failed for {symbol} "
-                            f"({token_key}): {individual_error}"
-                        )
-                        with subscription_lock:
-                            subscription_retry_after[symbol] = _monotonic() + 5.0
-                    finally:
-                        with subscription_lock:
-                            subscription_pending.discard(symbol)
-            else:
-                for symbol, *_ in batch:
-                    with subscription_lock:
-                        subscription_pending.discard(symbol)
-            sleep(0.10)
+            with subscription_lock:
+                force_resubscribe = symbol in force_resubscribe_symbols
+            Symbol_Token[symbol] = token_key
+            try:
+                subscribe_new_token(exchange, token, force=force_resubscribe)
+            except Exception:
+                Symbol_Token.pop(symbol, None)
+                raise
+            with subscription_lock:
+                if force_resubscribe:
+                    force_resubscribe_symbols.discard(symbol)
+                terminal_subscribed.add(symbol)
+            print(f"Symbol = {symbol}, Token={token} subscription sent; waiting for first WebSocket tick")
+            feed_watchdog_executor.submit(
+                _watch_new_symbol_subscription, symbol, exchange, token
+            )
+        except Exception as exc:
+            print(f"Subscribe error {symbol}: {exc}")
+            with subscription_lock:
+                subscription_retry_after[symbol] = _monotonic() + 5.0
+        finally:
+            with subscription_lock:
+                subscription_pending.discard(symbol)
 
     def write_live_market_data():
-        """Write LTP/OHLC/quotes on its own loop, independent of order processing."""
         pythoncom = None
         try:
             try:
@@ -1941,16 +1645,14 @@ def start_Trade_Terminal():
             print("Independent live market-data writer started (LTP/OHLC/Bid/Ask/Volume/OI).")
             while True:
                 try:
-                    # Reacquire the workbook/sheet each cycle. A worksheet COM
-                    # proxy from before an Excel crash can never be reused.
                     market_sheet = get_live_trade_sheet(get_terminal_workbook())
                     market_symbols = market_sheet.range("A4:A1000").value
                     market_rows = []
                     for market_symbol in market_symbols:
                         values = [None] * 11
-                        symbol_key = _extract_symbol(market_symbol)
-                        if symbol_key:
-                            token_key = Symbol_Token.get(symbol_key)
+                        symbol_str = _extract_symbol(market_symbol)
+                        if symbol_str:
+                            token_key = Symbol_Token.get(symbol_str)
                             if token_key:
                                 with LIVE_DATA_LOCK:
                                     quote_snapshot = dict(live_data.get(token_key, {}))
@@ -1972,8 +1674,6 @@ def start_Trade_Terminal():
                 except Exception as market_error:
                     if not is_excel_connection_lost():
                         print(f"Live market-data refresh error (order workers continue): {market_error}")
-                    # Avoid flooding the console while Excel is closed; retry
-                    # slowly until the user reopens the workbook.
                     sleep(1.0 if is_excel_connection_lost() else 0.15)
         except Exception as writer_error:
             print(f"Live market-data writer stopped: {writer_error}")
@@ -1987,17 +1687,12 @@ def start_Trade_Terminal():
     Thread(target=write_live_market_data, daemon=True, name="LiveMarketDataWriter").start()
 
     global LimitOrderBook
-    #run a parallel thread to update the status
     while True:
         try:
-            # Rebind after Excel is closed/reopened; never reuse stale COM sheets.
             excel_TT = get_terminal_workbook()
             tt = get_live_trade_sheet(excel_TT)
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
-                # Excel recovery and Shoonya session recovery are separate.
-                # Validate the authenticated REST session before replaying feed
-                # subscriptions, so a stale login is not mistaken for a feed issue.
                 try:
                     session_check = api.get_limits()
                     session_valid = (
@@ -2024,7 +1719,8 @@ def start_Trade_Terminal():
                     )
                 else:
                     active_symbols = [
-                        _extract_symbol(value) for value in tt.range("A4:A1000").value
+                        _extract_symbol(value)
+                        for value in tt.range("A4:A1000").value
                         if _extract_symbol(value)
                     ]
                     with subscription_lock:
@@ -2038,57 +1734,31 @@ def start_Trade_Terminal():
                     )
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
-            # Excel is the source of truth: reconcile additions, edits and deletions.
-            current_symbols = {
-                _extract_symbol(value) for value in symbols
-                if _extract_symbol(value)
-            }
-            with TERMINAL_DESIRED_SYMBOLS_LOCK:
-                TERMINAL_DESIRED_SYMBOLS.clear()
-                TERMINAL_DESIRED_SYMBOLS.update(current_symbols)
-            with subscription_lock:
-                removed_symbols = set(Symbol_Token) - current_symbols
-                for removed_symbol in removed_symbols:
-                    old_token_key = Symbol_Token.pop(removed_symbol, None)
-                    terminal_subscribed.discard(removed_symbol)
-                    subscription_pending.discard(removed_symbol)
-                    subscription_retry_after.pop(removed_symbol, None)
-                    force_resubscribe_symbols.discard(removed_symbol)
-                    if old_token_key:
-                        with SOCKET_SUBSCRIPTIONS_LOCK:
-                            TERMINAL_SOCKET_SUBSCRIPTIONS.discard(old_token_key)
-                            if old_token_key not in OPTION_CHAIN_SOCKET_SUBSCRIPTIONS:
-                                SOCKET_SUBSCRIPTIONS.discard(old_token_key)
-                                SOCKET_SESSION_SUBSCRIPTIONS.discard(old_token_key)
-                        with LIVE_DATA_LOCK:
-                            live_data.pop(old_token_key, None)
-                            SYMBOLDICT.pop(old_token_key, None)
             trading_info = tt.range("BA4:BS1000").value
             terminal_inputs = tt.range("M4:W1000").value
             management_inputs = tt.range("AA4:AD1000").value
             for row_offset, internal_row in enumerate(trading_info):
                 ui = terminal_inputs[row_offset]
                 management = management_inputs[row_offset]
-                internal_row[0] = ui[0]                         # Qty (M)
-                # Manual BUY/SELL cells are dispatched independently below.
-                # Keep them out of the legacy single-position entry state machine.
+                internal_row[0] = ui[0]
                 internal_row[1] = None
                 internal_row[2] = None
-                internal_row[18] = ui[1]                        # Order Type (N)
-                internal_row[11] = management[0]                # Target (AA)
-                internal_row[12] = management[1]                # SL (AB)
-                internal_row[13] = management[2]                # Trail Enable (AC)
-                internal_row[14] = management[3]                # Latest SL (AD)
+                internal_row[18] = ui[1]
+                internal_row[11] = management[0]
+                internal_row[12] = management[1]
+                internal_row[13] = management[2]
+                internal_row[14] = management[3]
             tt.range("BA4:BS1000").value = trading_info
             main_list = []
             indicator_list = []
 
-            symbols_to_subscribe = []
             idx = 0
             for i in symbols:
                 lst = [None, None, None, None,None, None, None, None, None,None,None]
                 indicator_row = [None, None, None, None, None, None, "", ""]
-                # Normalize scalar and nested xlwings values consistently.
+                # Excel cells may contain trailing spaces or inconsistent case, and xlwings
+                # returns vertical ranges as a list of lists (e.g., [['NFO:NIFTY']]).
+                # Use the helper to safely extract the canonical string key.
                 i = _extract_symbol(i)
                 if i:
                     with subscription_lock:
@@ -2101,7 +1771,7 @@ def start_Trade_Terminal():
                         if needs_subscription:
                             subscription_pending.add(i)
                     if needs_subscription:
-                        symbols_to_subscribe.append(i)
+                        subscription_executor.submit(subscribe_symbol_in_background, i)
                     if i in terminal_subscribed and i in Symbol_Token:
                         try:
                             exchange = i[:3]
@@ -2133,7 +1803,6 @@ def start_Trade_Terminal():
                                 excel_row = idx + 4
                                 ui_row = terminal_inputs[idx]
                                 current_ltp = convert_to_float(quote.get("lp", 0))
-                                # Both sides are evaluated independently; neither command cell is cleared.
                                 dispatch_terminal_side_order(
                                     tt, excel_row, i, "BUY", ui_row[0], ui_row[1],
                                     ui_row[3], ui_row[4], current_ltp
@@ -2142,7 +1811,6 @@ def start_Trade_Terminal():
                                     tt, excel_row, i, "SELL", ui_row[0], ui_row[1],
                                     ui_row[9], ui_row[10], current_ltp
                                 )
-                                #print(f" {i} : {trade_info}")
                                 has_new_trigger = (
                                     _is_terminal_trigger(trade_info[1], "BUY")
                                     or _is_terminal_trigger(trade_info[2], "SELL")
@@ -2150,32 +1818,19 @@ def start_Trade_Terminal():
                                 has_live_trade_state = trade_info[16] in ("Entry_Pending", "Active", "Exit_Pending")
                                 if trade_info[0] is not None and (has_new_trigger or has_live_trade_state):
                                     if isinstance(trade_info[0], (int, float)):
-                                        
                                         LTP = float(quote.get("lp", 0))
-                                        
                                         if Trade_Mode == 'REAL':
-                                            #Real trade mode handling will handle here
                                             if _is_terminal_trigger(trade_info[1], "BUY") and LTP != 0:
                                                 if trade_info[3] in ['True_Market' ,'True_Limit_LTP', 'Limit_Below', 'Limit_Above']:
-                                                    
-                                                    
-                                                    #0:Qty    1:BUY/SELL    2:Entry_Signal  3:Entry_Limit_Price  4:Entry_Done@  5:Entry_Order_ID 6: Entry_Remarks  7:Exit_Signal 8:Exit_Done @ 9:Exit_Order_ID  10: Exit_Remarks 11:Target    12:SL  13:Trail Enable 14: Latest_SL 15:Trade_status 16: PnL
-                                                    
-            
                                                     if trade_info[16] != 'Active' and trade_info[16] != 'Entry_Pending' and trade_info[16] != 'Exit_Pending' and trade_info[16] != 'Closed' and (trade_info[16] is None or trade_info[16] == ''):
-                                                        
-                                                        
                                                         if trade_info[3] == 'True_Market':
-                                                            #Entry buy trade immediately
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
-                                                            
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2183,9 +1838,7 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                            
                                                         elif trade_info[3] == 'True_Limit_LTP':    
-                                                            #Entry buy trade immediately at ltp price
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
@@ -2193,7 +1846,6 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2201,20 +1853,14 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                            
                                                         elif trade_info[3] == 'Limit_Below' and trade_info[4] is not None:
-                                                            #print(f"LTP={LTP}, trade_info[4] ={trade_info[4]}")
-                                                            
-                                                            #handling real Limit_Below based trade
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",trade_info[4], trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2222,21 +1868,14 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                           
-                                                            
                                                         elif trade_info[3] == 'Limit_Above' and trade_info[4] is not None:
-                                                            #print(f"LTP={LTP}, trade_info[4] ={trade_info[4]}")
-                                                            
-                                                            #handling real Limit_Above based trade
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "BUY" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","SL-M",trade_info[4], trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2244,33 +1883,21 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                            
                                                     elif trade_info[16] == 'Entry_Pending' :
                                                         Order_id = str(int(trade_info[6]))
-                                                        #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
                                                             tt.range(f"BF{excel_row}").value = Executed_price
                                                             tt.range(f"BQ{excel_row}").value = 'Active'
-                                                        
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Bought at " + str(Executed_price)
-                                                            
                                                             Telegram_Message.append(Message)
-                                                            # Order and execution messages are intentionally not spoken.
-                        
-                        
                                                         if status in ("REJECTED", "CANCELLED", "CANCELED"):
                                                             tt.range(f"BQ{excel_row}").value = status
                                                         tt.range(f"BH{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
-                                                        
                                                     elif trade_info[16] == 'Active':
-                                                        
-                                                        
                                                         PnL = (float(LTP) - float(trade_info[5])) * int(trade_info[0])
                                                         tt.range(f"BR{excel_row}").value = PnL
-                                                        #print(f"PnL = {PnL}")
-                                                        
                                                         TSL = 0
                                                         if type(trade_info[13]) is float:
                                                             if trade_info[14] == True:
@@ -2278,7 +1905,6 @@ def start_Trade_Terminal():
                                                                     CUR_TSL = LTP - trade_info[5] + trade_info[13]
                                                                 else:
                                                                     CUR_TSL = trade_info[13]
-                                                                
                                                                 OLD_TSL = trade_info[15]
                                                                 if OLD_TSL is not None:
                                                                     TSL = max(CUR_TSL,OLD_TSL)
@@ -2286,103 +1912,66 @@ def start_Trade_Terminal():
                                                                     TSL = CUR_TSL 
                                                             else:
                                                                 TSL = trade_info[13]
-                                                            
                                                             tt.range(f"BP{excel_row}").value = TSL
-                                                        
                                                         if trade_info[8] == 'True_Market':
-                                                            #exit buy order immediately
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
-                                                                
                                                         elif trade_info[8] == 'True_Limit_LTP':
-                                                            #exit buy at ltp limit 
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
-                                                            
                                                         elif type(trade_info[12]) is float and trade_info[12] <= LTP:
-                                                            #target meets, so exit the buy order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", target meets so exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
-                                                            
                                                             register_pending_order(order_id)
-                                                                
                                                             tt.range(f"BK{excel_row}").value = order_id
                                                             tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
-                                                        
                                                         elif TSL >= LTP and type(trade_info[13]) is float:
-                                                            #sl meets, so exiting the buy order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", TSL meets so exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
-                                                            
                                                             register_pending_order(order_id)
-                                                            
                                                             tt.range(f"BK{excel_row}").value = order_id
                                                             tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
-                                                            
-                                                    
                                                     elif trade_info[16] ==  'Exit_Pending':
                                                         Order_id = str(int(trade_info[10]))
-                                                        #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
                                                             tt.range(f"BJ{excel_row}").value = Executed_price
                                                             tt.range(f"BQ{excel_row}").value = 'Closed'
-                                                            
                                                             PnL = (float(Executed_price) - float(trade_info[5])) * int(trade_info[0])
                                                             tt.range(f"BR{excel_row}").value = PnL
-                                                            
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Sold at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
-                                                            
                                                             Telegram_Message.append(Message)
-                                                            # Order and execution messages are intentionally not spoken.
-                                                            
                                                         if status in ("REJECTED", "CANCELLED", "CANCELED"):
                                                             tt.range(f"BQ{excel_row}").value = status
                                                         tt.range(f"BL{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
-                                                        
                                             elif _is_terminal_trigger(trade_info[2], "SELL") and LTP != 0:
-                                                
                                                 if trade_info[3] in ['True_Market' , 'True_Limit_LTP' , 'Limit_Below' , 'Limit_Above']:
-                                                    #0:Qty    1:BUY/SELL    2:Entry_Signal  3:Entry_Limit_Price  4:Entry_Done@  5:Entry_Order_ID 6: Entry_Remarks  7:Exit_Signal 8:Exit_Done @ 9:Exit_Order_ID   10:Target    11:SL  12:Trail Enable 13: Latest_SL 14:Trade_status 15: PnL
-                                                    
-                                                    
                                                     if trade_info[16] != 'Active' and trade_info[16] != 'Entry_Pending' and trade_info[16] != 'Exit_Pending' and trade_info[16] != 'Closed' and (trade_info[16] is None or trade_info[16] == '' ):
-                                                
                                                         if trade_info[3] == 'True_Market':
-                                                            #entry sell order immediately
-                                                            
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                            
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BJ{excel_row}").value = None
@@ -2390,20 +1979,14 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                                #print("b")
-                                                            
                                                         elif trade_info[3] == 'True_Limit_LTP':    
-                                                            #Entry buy trade immediately at ltp price
-                                                            
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2411,19 +1994,14 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                                
                                                         elif trade_info[3] == 'Limit_Above' and trade_info[4] is not None:
-                                                            
-                                                            #handling real Limit_Above based trade
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","LIMIT",trade_info[4], trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2431,20 +2009,14 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                            
-                                                                    
                                                         elif trade_info[3] == 'Limit_Below' and trade_info[4] is not None:
-                                                                                                                       #handling real Limit_Above based trade
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + "SELL" + ", " + str(trade_info[3])+ ", " + str(trade_info[4])+ " triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "SELL","SL-M",trade_info[4], trade_info[18], display_row=idx + 4)
-                                                            
                                                             if order_id is None:
                                                                 tt.range(f"BQ{excel_row}").value = "Order_Rejected/Unconfirmed"
                                                             else:
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BF{excel_row}").value = None
                                                                 tt.range(f"BG{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Entry_Pending'
@@ -2452,38 +2024,26 @@ def start_Trade_Terminal():
                                                                 tt.range(f"BK{excel_row}").value = None
                                                                 tt.range(f"BP{excel_row}").value = None
                                                                 tt.range(f"BR{excel_row}").value = None
-                                                            
-                                                        
                                                     elif trade_info[16] == 'Entry_Pending' :
                                                         Order_id = str(int(trade_info[6]))
-                                                        #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
                                                             tt.range(f"BF{excel_row}").value = Executed_price
                                                             tt.range(f"BQ{excel_row}").value = 'Active'
-                                                            
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " Sold at " + str(Executed_price) 
-                                                            
                                                             Telegram_Message.append(Message)
-                                                            # Order and execution messages are intentionally not spoken.
-                                                            
                                                         tt.range(f"BH{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
-                                                        
                                                     elif trade_info[16] == 'Active':
-                                                        
                                                         PnL = (float(trade_info[5]) - float(LTP) ) * int(trade_info[0])
                                                         tt.range(f"BR{excel_row}").value = PnL
-                                                        
                                                         TSL = 9999999
-                                                        
                                                         if type(trade_info[13]) is float:
                                                             if trade_info[14] == True :
                                                                 if(LTP <= trade_info[5]):
                                                                     CUR_TSL = trade_info[13] - (trade_info[5] - LTP )
                                                                 else:
                                                                     CUR_TSL = trade_info[13]
-                                                                
                                                                 OLD_TSL = trade_info[15]
                                                                 if OLD_TSL is not None:
                                                                     TSL = min(CUR_TSL,OLD_TSL)
@@ -2491,128 +2051,77 @@ def start_Trade_Terminal():
                                                                     TSL = CUR_TSL 
                                                             else:
                                                                 TSL = trade_info[13]
-                                                            
                                                             tt.range(f"BP{excel_row}").value = TSL
-                                                            
-                                                        
                                                         if trade_info[8] == 'True_Market':
-                                                            #exit sell order immediately
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
                                                                 register_pending_order(order_id)
-                                                                    
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = "Exit_Pending"
-                                                                
                                                         elif trade_info[8] == 'True_Limit_LTP':
-                                                            #exit SELL at ltp limit 
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", " + str(trade_info[8]) +  " exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
-                                                            
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else:  
                                                                 register_pending_order(order_id)
-                                                                
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'    
-                                                                
                                                         elif type(trade_info[12]) is float and trade_info[12] >= LTP:
-                                                            #target meets, so exiting the sell order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", target meets so exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
-                                                            
                                                             register_pending_order(order_id)
-                                                            
                                                             tt.range(f"BK{excel_row}").value = order_id
                                                             tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
-                                                            
-                                                        
                                                         elif TSL <= LTP and type(trade_info[13]) is float:
-                                                            #sl hit, so exiting the sell order
                                                             Message =  str(i) + " : " +  str(trade_info[0]) + ", TSL meets so exit triggered"
                                                             logger.info(Message)
-                                                            
                                                             order_id = place_trade(i, int(trade_info[0]), "BUY","LIMIT",LTP, trade_info[18], display_row=idx + 4)
-                                                            
                                                             if order_id is None:
                                                                 tt.range(f"BI{excel_row}").value = None
                                                             else: 
-                                                            
                                                                 register_pending_order(order_id)
-                                                                
-                                                                
                                                                 tt.range(f"BK{excel_row}").value = order_id
                                                                 tt.range(f"BQ{excel_row}").value = 'Exit_Pending'
-                                                            
                                                     elif trade_info[16] ==  'Exit_Pending':
                                                         Order_id = str(int(trade_info[10]))
-                                                        #print(f"Order_id={Order_id}")
                                                         status = LimitOrderBook[Order_id]['status']
                                                         if status == 'COMPLETE':
                                                             Executed_price = LimitOrderBook[Order_id]['Executed_price']
                                                             tt.range(f"BJ{excel_row}").value = Executed_price
                                                             tt.range(f"BQ{excel_row}").value = 'Closed'
-                                                            
                                                             PnL = (float(trade_info[5]) - float(Executed_price)) * int(trade_info[0])
                                                             tt.range(f"BR{excel_row}").value = PnL
-                                                            
                                                             Message = str(int(trade_info[0])) + " quantity " + str(i[4:]) + " buyback at " + str(Executed_price) + ", Trade profit or Loss = " + str(round(PnL,2))
-                                                            
                                                             Telegram_Message.append(Message)
-                                                            # Order and execution messages are intentionally not spoken.
-                                                            
                                                         tt.range(f"BL{excel_row}").value = LimitOrderBook[Order_id]['Remarks']
-                            except Exception as e:
-                                Message = "Exception occur in core order book management:" + str(e)
-                                #print(Message)
-                                logger.info(Message)
-                                pass
                         except Exception as e:
-                            #print(f"exception : {str(e)}")
+                            Message = "Exception occur in core order book management:" + str(e)
+                            logger.info(Message)
                             pass
                 main_list.append(lst)
                 indicator_list.append(indicator_row)
-
                 idx += 1
 
-            # Submit all symbols discovered in this Excel scan together.
-            # The worker resolves tokens first, then sends groups of ten.
-            if symbols_to_subscribe:
-                subscription_executor.submit(
-                    subscribe_symbol_in_background, list(symbols_to_subscribe)
-                )
-
-            # B:L market quotes are written by LiveMarketDataWriter so a
-            # slow order/strategy task cannot pause LTP and OHLC updates.
             tt.range("AG4:AN1000").value = indicator_list
             tt.range("AA4:AF1000").value = tt.range("BM4:BR1000").value
-            # Yield to Excel's UI/event queue; the previous tight loop starved typing.
             sleep(0.15)
                 
         except Exception as e:
-            #print(f"Exception : {str(e)}")
             pass
-        # Keep Excel responsive even when a COM read/write cycle raises an exception.
         sleep(0.20)
 
 def get_position():
-    #print(f"I am inside get_position")
     global api
     try:
         positions = api.get_positions()
         df_positions = pd.DataFrame(positions)
-        #df_positions.to_csv("positions.csv")
-        #print(df_positions)
         mtm = 0
         pnl = 0
         day_m2m = 0
@@ -2621,33 +2130,23 @@ def get_position():
             for i in positions:
                 mtm += float(i['urmtom'])
                 pnl += float(i['rpnl'])
-                day_m2m = mtm + pnl
-            #print(f'{day_m2m} is your Daily MTM')
-        
+            day_m2m = mtm + pnl
             df_positions = df_positions[['exch','tsym','prd','netqty','netavgprc','lp','daybuyqty','daysellqty','daybuyavgprc','daysellavgprc','openbuyqty','opensellqty']]
-        
             df_positions = df_positions.rename(columns={'exch':'Exchange' ,'tsym':'Symbol' ,'prd':'Product' ,'netqty':'Net Quantity' ,'netavgprc':'Avg Price' ,'lp':'Last Price' ,'daybuyqty':'Buy Quantity' ,'daysellqty':'Sell Quantity' ,'daybuyavgprc':'Avg Buy Price' ,'daysellavgprc':'Avg. Sell Price' ,'openbuyqty':'Open Buy Quantity' ,'opensellqty':'Open Sell Quantity'})
-        
             df_positions['Net Quantity'] = df_positions['Net Quantity'].astype('int')
-        
     except Exception as e:
         print(f"Error in get_position: {e}")
-    return df_positions,day_m2m 
+    return df_positions,day_m2m
 
 def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX']):
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_BFO,df_ins_CDS, df_ins_MCX
     global api
-
     try:
         subdir = "Instrument"
-
         if not os.path.exists(subdir):
             os.makedirs(subdir)
-            
         print("Finvasia intrument token download started, may take upto 2-3 minutes ..")
-           
         if 'NSE' in Token_4_Exchange:
-            #reading nse instrument symbol
             zip_file = "NSE_symbols.txt.zip"
             url = f"https://api.shoonya.com/{zip_file}"
             r = requests.get(f"{url}", allow_redirects=True)
@@ -2658,9 +2157,7 @@ def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX
                 df_ins_NSE.to_csv(os.path.join(subdir,"NSE_symbols.csv"),index = False)
             except:
                 pass
-                
-        if 'BSE' in Token_4_Exchange:        
-            #reading BSE instrument symbol
+        if 'BSE' in Token_4_Exchange:
             zip_file = "BSE_symbols.txt.zip"
             url = f"https://api.shoonya.com/{zip_file}"
             r = requests.get(f"{url}", allow_redirects=True)
@@ -2671,10 +2168,7 @@ def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX
                 df_ins_BSE.to_csv(os.path.join(subdir,"BSE_symbols.csv"),index = False)
             except:
                 pass
-                
-        
         if 'NFO' in Token_4_Exchange:
-            #reading nfo instrument symbol
             zip_file = "NFO_symbols.txt.zip"
             url = f"https://api.shoonya.com/{zip_file}"
             r = requests.get(f"{url}", allow_redirects=True)
@@ -2682,36 +2176,32 @@ def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX
             df_ins_NFO = pd.read_csv(zip_file)
             df_ins_NFO['Expiry'] = pd.to_datetime(df_ins_NFO['Expiry']).apply(lambda x: x.date())
             df_ins_NFO = df_ins_NFO.sort_values(by=['Expiry',"Symbol",'StrikePrice'], ascending=[True,True,True])
-            df_ins_NFO = df_ins_NFO.astype({"StrikePrice": str}) 
+            df_ins_NFO = df_ins_NFO.astype({"StrikePrice": str})
             os.remove(zip_file)
             try:
                 df_ins_NFO.to_csv(os.path.join(subdir,"NFO_symbols.csv"),index = False)
             except:
                 pass
-
         if 'BFO' in Token_4_Exchange:
-            #reading nfo instrument symbol
             zip_file = "BFO_symbols.txt.zip"
             url = f"https://api.shoonya.com/{zip_file}"
             r = requests.get(f"{url}", allow_redirects=True)
             open(zip_file, "wb").write(r.content)
-            df_ins_BFO = pd.read_csv(zip_file, usecols=["Exchange", "Token", "LotSize", "TradingSymbol", "Expiry", "Instrument", "OptionType", "StrikePrice", "TickSize"])            
+            df_ins_BFO = pd.read_csv(zip_file, usecols=["Exchange", "Token", "LotSize", "TradingSymbol", "Expiry", "Instrument", "OptionType", "StrikePrice", "TickSize"])
             bfo_symbols = np.where(
-                                df_ins_BFO['TradingSymbol'].str.contains('SENSEX50', regex=False), 'SENSEX50',
-                                df_ins_BFO['TradingSymbol'].str.extract(r'(.*?)(?:\d)', expand=False)
-                                )
+                df_ins_BFO['TradingSymbol'].str.contains('SENSEX50', regex=False), 'SENSEX50',
+                df_ins_BFO['TradingSymbol'].str.extract(r'(.*?)(?:\d)', expand=False)
+            )
             df_ins_BFO.insert(3, "Symbol", bfo_symbols)
             df_ins_BFO['Expiry'] = pd.to_datetime(df_ins_BFO['Expiry']).apply(lambda x: x.date())
             df_ins_BFO = df_ins_BFO.sort_values(by=['Expiry',"Symbol",'StrikePrice'], ascending=[True,True,True])
-            df_ins_BFO = df_ins_BFO.astype({"StrikePrice": str}) 
+            df_ins_BFO = df_ins_BFO.astype({"StrikePrice": str})
             os.remove(zip_file)
             try:
                 df_ins_BFO.to_csv(os.path.join(subdir,"BFO_symbols.csv"),index = False)
             except:
                 pass
-                
         if 'CDS' in Token_4_Exchange:
-            #reading CDS instrument symbol
             zip_file = "CDS_symbols.txt.zip"
             url = f"https://api.shoonya.com/{zip_file}"
             r = requests.get(f"{url}", allow_redirects=True)
@@ -2725,9 +2215,7 @@ def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX
                 df_ins_CDS.to_csv(os.path.join(subdir,"CDS_symbols.csv"),index = False)
             except:
                 pass
-                
         if 'MCX' in Token_4_Exchange:
-            #reading MCX instrument symbol
             zip_file = "MCX_symbols.txt.zip"
             url = f"https://api.shoonya.com/{zip_file}"
             r = requests.get(f"{url}", allow_redirects=True)
@@ -2741,13 +2229,11 @@ def LoadInstrument_token(Token_4_Exchange = ['NSE','BSE','NFO', 'BFO','CDS','MCX
                 df_ins_MCX.to_csv(os.path.join(subdir,"MCX_symbols.csv"),index = False)
             except:
                 pass
-                
         print("Finvasia intrument token download completed")
-        
     except Exception as e:
         print(f"Exception in LoadInstrument_token : {e}")
         pass
-        
+
 OPTION_CHAIN_HEADERS = [
     "CE OI", "CE Change OI", "CE Volume", "CE IV", "CE LTP",
     "CE Change %", "CE Bid Qty", "CE Bid", "CE Ask", "CE Ask Qty",
@@ -2756,46 +2242,34 @@ OPTION_CHAIN_HEADERS = [
     "PE LTP", "PE IV", "PE Volume", "PE Change OI", "PE OI",
 ]
 
-
 def prepare_option_chain_output(sheet):
-    """Replace legacy Greek headings and clear the old Greek output columns."""
     sheet.range("A2:AE2").value = [OPTION_CHAIN_HEADERS + [None] * 10]
     sheet.range("V2:AE500").clear_contents()
     sheet.range("V3:AE500").clear_contents()
-
 
 def start_optionchain():
     global subscribe_symbol
     global live_data
     global df_ins_NFO
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
-    
     global subs_lst
     excel_name = get_terminal_workbook()
     oci = excel_name.sheets("Option_Chain_Input")
     Option_Chain_Output = excel_name.sheets("Option_Chain_Output")
     prepare_option_chain_output(Option_Chain_Output)
-    
-
     oci.range("F3").value = None
     oci.range("F4").value = None
     oci.range("a2:c500").value = None
-    
     Option_Chain_Output.range('a3:ae500').value = None
-
     IterationSleep = 1
-    
     oci.range("d2").value = "Segment==>>"
     oci.range("d3").value, oci.range("d4").value = "Symbol==>>", "Expiry==>>",
     oci.range("d5").value, oci.range("d6").value = "RefreshRate==>>", "NoOfStrike==>>",
     oci.range("d7").value, oci.range("d8").value = "ExpiryType==>>" , "GreekMatch==>>"
-    
-    pre_selected_segment = pre_selected_symbol = pre_selected_expiry = "" 
+    pre_selected_segment = pre_selected_symbol = pre_selected_expiry = ""
     pre_selected_NoOfStrike = 0
-    
     while True:
         try:
-            # Refresh sheet proxies after an Excel crash/reopen.
             excel_name = get_terminal_workbook()
             oci = excel_name.sheets("Option_Chain_Input")
             Option_Chain_Output = excel_name.sheets("Option_Chain_Output")
@@ -2803,7 +2277,6 @@ def start_optionchain():
             Exchange = selected_segment[:3]
             if Exchange not in ['NFO','CDS','MCX', 'BFO']:
                 Exchange = 'NFO'
-            
             oci.range("F2").value = None
             if Exchange == 'NFO':
                 df_instrument = df_ins_NFO
@@ -2815,43 +2288,32 @@ def start_optionchain():
                 df_instrument = df_ins_BFO
             else:
                 oci.range("F2").value = "Please select correct segment"
-            #print(f"pre : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
             if pre_selected_segment != selected_segment:
                 if Exchange == 'NFO':
                     df_symbol = df_ins_NFO
                 if Exchange == 'BFO':
-                    df_symbol = df_ins_BFO                
+                    df_symbol = df_ins_BFO
                 if Exchange == 'CDS':
                     df_symbol = df_ins_CDS[df_ins_CDS['Instrument'] == 'UNDCUR']
                 if Exchange == 'MCX':
                     df_symbol = df_ins_MCX[df_ins_MCX['Instrument'] == 'OPTFUT']
-                    
                 df_symbol = df_symbol.drop_duplicates( "Symbol" , keep='first')
                 df_symbol =df_symbol[['Symbol']]
                 oci.range("a2:c500").value = None
                 oci.range("a1").options(index=False, header=True).value = df_symbol
-                    
-            pre_selected_segment = selected_segment
-            #print(f"post : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
-            
+                pre_selected_segment = selected_segment
             input_symbol = str(oci.range("E3").value or "").strip()
             if input_symbol:
-
                 df_instrument_temp = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
-                
                 if len(df_instrument_temp) > 0:
                     if pre_selected_symbol != input_symbol:
                         df_exp = df_instrument_temp.drop_duplicates( "Expiry" , keep='first')
-                        
                         df_exp =df_exp[['Expiry','LotSize']]
                         df_exp.sort_values(by = 'Expiry',inplace = True)
                         oci.range("b2:C100").value = None
                         oci.range("b2").options(index=False, header=False).value = df_exp
-                    
-                    pre_selected_symbol = input_symbol                    
-                    
+                        pre_selected_symbol = input_symbol
                     oci.range("F3").value = None
-                    
                     expiry_input = normalize_expiry_input(oci.range("E4").value)
                     valid_expiry = resolve_option_expiry(df_instrument, input_symbol, expiry_input)
                     if valid_expiry is not None and valid_expiry != expiry_input:
@@ -2861,67 +2323,43 @@ def start_optionchain():
                             f"Option Chain: invalid/blank expiry corrected for "
                             f"{input_symbol}; using {expiry_input.strftime('%d-%m-%Y')}"
                         )
-
-                    #print(f"Option Chain Details: input_symbol={input_symbol},expiry_input={expiry_input}")
                     if expiry_input != None:
-
                         df_instrument_temp = df_instrument_temp[df_instrument_temp.Expiry == expiry_input]
                         if len(df_instrument_temp) > 0:
-
                             oci.range("F4").value = None
                             try:
                                 IterationSleep = oci.range("E5").value
                                 if IterationSleep != None:
                                     IterationSleep = int(IterationSleep)
-                                    oci.range("F5").value = None
+                                oci.range("F5").value = None
                             except:
                                 IterationSleep = 5
                                 Message = "Iteration should be number"
                                 print(Message)
                                 oci.range("F5").value = Message
-
                             symbol_in_template = [itr for itr in OptionChain_template if itr["symbol"] ==input_symbol ]
                             if len(symbol_in_template) == 0:
-                                #print("Symbol Not found, so append the details")
-
                                 ind_df_specific_symbol = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
-                                #print(ind_df_specific_symbol)
-
                                 List_of_Expiry = ind_df_specific_symbol["Expiry"].unique()
-                                #print(List_of_Expiry)
-
                                 Expiry_strikelist_list = []
-
                                 for expiry in List_of_Expiry:
                                     if str( expiry ) != 'NaT' :
-                                        #print(expiry)
                                         ind_df_specific_symbol_expiry = ind_df_specific_symbol[(ind_df_specific_symbol.Expiry == expiry) ]
-                                        #print(ind_df_specific_symbol_expiry)
-
                                         List_of_strikes = ind_df_specific_symbol_expiry["StrikePrice"].unique()
-
                                         LotSize = ind_df_specific_symbol_expiry.iloc[0]["LotSize"]
-                                        #print(LotSize)
-                                        #print(List_of_strikes)
                                         strike_pe_ce_list = []
-
                                         for strike in List_of_strikes:
-                                            #print(f"\nsymbol:{input_symbol},Expiry:{expiry},strike:{strike}")
                                             ind_df_specific_symbol_expiry_pe = ind_df_specific_symbol_expiry[
                                                 (ind_df_specific_symbol_expiry.StrikePrice == str(strike)) & (ind_df_specific_symbol_expiry.OptionType == "PE") ]
                                             if len(ind_df_specific_symbol_expiry_pe) > 0:
                                                 pe_token = ind_df_specific_symbol_expiry_pe.iloc[0]["Token"]
                                             else:
                                                 pe_token = "NA"
-
                                             ind_df_specific_symbol_expiry_ce = ind_df_specific_symbol_expiry[(            ind_df_specific_symbol_expiry.StrikePrice== str(strike))& (            ind_df_specific_symbol_expiry.OptionType == "CE")]
                                             if len(ind_df_specific_symbol_expiry_ce) > 0:
                                                 ce_token = ind_df_specific_symbol_expiry_ce.iloc[0]["Token"]
                                             else:
                                                 ce_token = "NA"
-
-                                            # print(f"symbol:{input_symbol},Expiry:{expiry},strike:{strike},pe_token={pe_token},ce_token={ce_token}")
-
                                             strike_pe_ce_dictionary = dict(
                                                 {
                                                     "strike": strike,
@@ -2929,11 +2367,7 @@ def start_optionchain():
                                                     "CE_Token": ce_token,
                                                 }
                                             )
-
                                             strike_pe_ce_list.append(strike_pe_ce_dictionary)
-
-                                        # print(strike_pe_ce_list)
-
                                         expiry_stikelist_dict = dict(
                                             {
                                                 "Expiry": expiry,
@@ -2941,69 +2375,49 @@ def start_optionchain():
                                                 "Strike_list": strike_pe_ce_list,
                                             }
                                         )
-
                                         Expiry_strikelist_list.append(expiry_stikelist_dict)
                                     else:
                                         print(f"Ignoring the wrong date : {expiry}")
-                                # print("\n\n")
-                                # print(Expiry_strikelist_list)
-
                                 Final_dic = dict(
                                     {
                                         "symbol": input_symbol,
                                         "Expiry_Strike_token": Expiry_strikelist_list,
                                     }
                                 )
-
                                 OptionChain_template.append(Final_dic)
-                                # print("\n\n")                                #print(OptionChain_template)
                             else:
                                 Message = (
                                     "symbol already available in option chain template"
                                 )
-
                             List_of_Expiry_Strike_token = [
                                 itr["Expiry_Strike_token"]
                                 for itr in OptionChain_template
                                 if itr["symbol"] == input_symbol
                             ][0]
-                            #print(f"\n\n******\n\n{List_of_Expiry_Strike_token}")
-
                             for expiry_strike in List_of_Expiry_Strike_token:
-                                
-                               
                                 if input_symbol not in subs_lst:
-
                                     List_of_particular_expiry_strike = [
                                         itr["Strike_list"]
                                         for itr in List_of_Expiry_Strike_token
                                         if itr["Expiry"] == expiry_strike["Expiry"]
                                     ][0]
-
                                     for strike_dict in List_of_particular_expiry_strike:
                                         print(f"Going to subscribe {input_symbol} strike {strike_dict.get('strike')}")
                                         PE_Token = strike_dict.get("PE_Token")
-                                        # print(PE_Token)
                                         CE_Token = strike_dict.get("CE_Token")
-                                        # print(CE_Token)
                                         if PE_Token != "NA":
-                                            subscribe_new_token(Exchange, PE_Token, source="option_chain")
+                                            subscribe_new_token(Exchange, PE_Token)
                                         if CE_Token != "NA":
-                                            subscribe_new_token(Exchange, CE_Token, source="option_chain")
-
-                            if input_symbol not in subs_lst:
-                                subs_lst.append(input_symbol)
-                                print(f"{input_symbol} subscription completed")
-
+                                            subscribe_new_token(Exchange, CE_Token)
+                                    if input_symbol not in subs_lst:
+                                        subs_lst.append(input_symbol)
+                                        print(f"{input_symbol} subscription completed")
                             pd_oc = pd.DataFrame(columns=[ "CE_token", "CE_oi",  "CE_poi", "CE_toi", "CE_lp", "CE_pc", "CE_bq1","CE_bp1", "CE_sq1", "CE_sp1",  "strike", "PE_bq1", "PE_bp1", "PE_sq1", "PE_sp1", "PE_pc",  "PE_lp",  "PE_toi", "PE_poi", "PE_oi", "PE_token","CE_coi","PE_coi","CE_v","PE_v"] )
-
-                            # prepare option chain
                             List_of_Expiry_Strike_token = [
                                 itr["Expiry_Strike_token"]
                                 for itr in OptionChain_template
                                 if itr["symbol"] == input_symbol
                             ][0]
-                            #print(f"List_of_Expiry_Strike_token = {List_of_Expiry_Strike_token}")
                             try:
                                 Lot_Size = [
                                     itr["LotSize"]
@@ -3015,11 +2429,7 @@ def start_optionchain():
                                     for itr in List_of_Expiry_Strike_token
                                     if itr["Expiry"] == expiry_input
                                 ][0]
-                                #print(f"****{live_data}")
-                                #print(f"List_of_particular_expiry_strike= {List_of_particular_expiry_strike}")
-                                
                                 isFound, Fut_Token = GetToken(Exchange,input_symbol)
-                                #print(f"isFound {isFound} Fut_Token {Fut_Token}")
                                 if Exchange == 'NFO':
                                     isFound, Spot_Token = GetToken('NSE',input_symbol)
                                     spot_ltp = convert_to_float(api.get_quotes("NSE", str(Spot_Token)).get("lp"))
@@ -3029,23 +2439,13 @@ def start_optionchain():
                                 else:    
                                     Spot_Token = Fut_Token
                                     spot_ltp = convert_to_float(api.get_quotes(Exchange, str(Spot_Token)).get("lp"))
-                                #print(f"Spot_Token {Spot_Token} spot_ltp {spot_ltp}")
                                 future_ltp = convert_to_float(api.get_quotes(Exchange, str(Fut_Token)).get("lp"))
-                                
-                                #print(f"{input_symbol} spot ltp = {spot_ltp} future ltp = {future_ltp}")
-
                                 for strike_dict in List_of_particular_expiry_strike:
-                                    
                                     Strike = convert_to_float(strike_dict.get("strike"))
-                                    #print(Strike)
                                     PE_Token = strike_dict.get("PE_Token")
                                     PE_Token = str(Exchange)+ "|"  + str(PE_Token)
-                                    #print(PE_Token)
                                     CE_Token = strike_dict.get("CE_Token")
                                     CE_Token =  str(Exchange)+ "|" + str(CE_Token)
-                                    #print(CE_Token)
-                                    
-                                    
                                     try:
                                         CE_oi = live_data[str(CE_Token)].get("oi", 0)
                                     except:
@@ -3054,9 +2454,7 @@ def start_optionchain():
                                         CE_poi = live_data[str(CE_Token)].get("poi", 0)
                                     except:
                                         CE_poi = 0
-                                    
                                     CE_coi = int(CE_oi) - int(CE_poi)
-                                    
                                     try:
                                         CE_toi = live_data[str(CE_Token)].get("toi", "-")
                                     except:
@@ -3085,7 +2483,6 @@ def start_optionchain():
                                         CE_sp1 = live_data[str(CE_Token)].get("sp1", "-")
                                     except:
                                         CE_sp1 = "-"
-                                    
                                     try:
                                         PE_oi = live_data[str(PE_Token)].get("oi", 0)
                                     except:
@@ -3094,11 +2491,7 @@ def start_optionchain():
                                         PE_poi = live_data[str(PE_Token)].get("poi", 0)
                                     except:
                                         PE_poi = 0
-                                    
                                     PE_coi = int(PE_oi) - int(PE_poi)
-                                    
-                                    #print(f"CE COI : {CE_oi} {CE_poi} {CE_coi}")
-                                    #print(f"PE COI : {PE_oi} {PE_poi} {PE_coi}")
                                     try:
                                         PE_toi = live_data[str(PE_Token)].get("toi", "-")
                                     except:
@@ -3127,17 +2520,14 @@ def start_optionchain():
                                         PE_sp1 = live_data[str(PE_Token)].get("sp1", "-")
                                     except:
                                         PE_sp1 = "-"
-                                    
                                     try:
                                         CE_v = live_data[str(CE_Token)].get("v", 0)
                                     except:
                                         CE_v = 0
-                                        
                                     try:
                                         PE_v = live_data[str(PE_Token)].get("v", 0)
                                     except:
                                         PE_v = 0
-                                    
                                     dic_data = {
                                             "CE_token": CE_Token,
                                             "CE_oi": CE_oi,
@@ -3166,27 +2556,19 @@ def start_optionchain():
                                             "PE_v":PE_v,
                                         }
                                     pd_oc = pd.concat([pd_oc, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                    
-                                #pd_oc.to_csv("pd_oc.csv")                            
-                                #print(pd_oc)
                                 pd_oc = pd_oc.astype({"strike": float})
                                 pd_oc = pd_oc.sort_values(by="strike", ascending=True)
-
                                 pd_oc = pd_oc.fillna(0)
-                                
                                 pd_oc = pd_oc.astype({"CE_oi": int})
                                 pd_oc = pd_oc.astype({"PE_oi": int})
                                 pd_oc = pd_oc.astype({"CE_poi": int})
                                 pd_oc = pd_oc.astype({"PE_poi": int})
                                 pd_oc = pd_oc.astype({"CE_coi": int})
                                 pd_oc = pd_oc.astype({"PE_coi": int})
-                                
                                 pd_oc = pd_oc.astype({"CE_v": int})
                                 pd_oc = pd_oc.astype({"PE_v": int})
-                                
                                 pd_oc["CE_v"] = pd_oc["CE_v"] / int(Lot_Size)
                                 pd_oc["PE_v"] = pd_oc["PE_v"] / int(Lot_Size)
-                                
                                 pd_oc["CE_oi"] = pd_oc["CE_oi"] / int(Lot_Size)
                                 pd_oc["PE_oi"] = pd_oc["PE_oi"] / int(Lot_Size)
                                 pd_oc["CE_poi"] = pd_oc["CE_poi"] / int(Lot_Size)
@@ -3194,46 +2576,32 @@ def start_optionchain():
                                 pd_oc["CE_coi"] = pd_oc["CE_coi"] / int(Lot_Size)
                                 pd_oc["PE_coi"] = pd_oc["PE_coi"] / int(Lot_Size)
                                 pd_oc["OI_SUM"] = pd_oc["CE_oi"] + pd_oc["PE_oi"]
-
-                                #print(pd_oc)
-                                
                                 df_oc_pro = pd_oc
-                                
                                 try:
                                     NoOfStrike = int(oci.range("E6").value)
                                 except Exception as e:
                                     NoOfStrike = 100
-                                
                                 df_oc_pro['strike_diff'] = abs(df_oc_pro['strike'] - spot_ltp)
-            
                                 df_oc_pro.sort_values(by = 'strike_diff',inplace = True)
-                                
-                                #print(f"\n\n***\n\n{df_oc_pro}")
                                 AtmStrike = convert_to_float(df_oc_pro.iloc[0]['strike'])
                                 AtmStrikeCallPrice = convert_to_float(df_oc_pro.iloc[0]['CE_lp'])
                                 AtmStrikePutPrice = convert_to_float(df_oc_pro.iloc[0]['PE_lp'])
-                                
-                                #additional detail related to dump on input page
                                 Future_LTP = future_ltp
                                 Max_Pain_at_Strike = df_oc_pro[df_oc_pro.OI_SUM == df_oc_pro["OI_SUM"].max()].iloc[0]['strike']
                                 Ltp_at_Max_Pain_CE = df_oc_pro[df_oc_pro.OI_SUM == df_oc_pro["OI_SUM"].max()].iloc[0]['CE_lp']
                                 Ltp_at_Max_Pain_PE = df_oc_pro[df_oc_pro.OI_SUM == df_oc_pro["OI_SUM"].max()].iloc[0]['PE_lp']
-                                #ATM_Strike = 
                                 LTP_at_ATM_CE = df_oc_pro[df_oc_pro.strike == AtmStrike].iloc[0]['CE_lp']
                                 LTP_at_ATM_PE = df_oc_pro[df_oc_pro.strike == AtmStrike].iloc[0]['PE_lp']
                                 Total_OI_CE = df_oc_pro["CE_oi"].sum()
                                 Total_OI_PE = df_oc_pro["PE_oi"].sum()
-                                
                                 Max_OI_CE = df_oc_pro["CE_oi"].max()
                                 Max_OI_PE = df_oc_pro["PE_oi"].max()
                                 Max_OI_at_Strike_CE = df_oc_pro[df_oc_pro.CE_oi == df_oc_pro["CE_oi"].max()].iloc[0]['strike']
                                 Max_OI_at_Strike_PE = df_oc_pro[df_oc_pro.PE_oi == df_oc_pro["PE_oi"].max()].iloc[0]['strike']
                                 LTP_of_Max_OI_Strike_CE = df_oc_pro[df_oc_pro.CE_oi == df_oc_pro["CE_oi"].max()].iloc[0]['CE_lp']
                                 LTP_of_Max_OI_Strike_PE = df_oc_pro[df_oc_pro.PE_oi == df_oc_pro["PE_oi"].max()].iloc[0]['PE_lp']
-
                                 Total_OI_Change_CE = df_oc_pro["CE_coi"].sum()
                                 Total_OI_Change_PE = df_oc_pro["PE_coi"].sum()
-                                
                                 Max_Change_in_OI_addition_CE = df_oc_pro["CE_coi"].max()
                                 Max_Change_in_OI_addition_PE = df_oc_pro["PE_coi"].max()
                                 Max_OI_addition_at_Srike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['strike']
@@ -3246,131 +2614,81 @@ def start_optionchain():
                                 Max_OI_unwinding_at_Srike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].min()].iloc[0]['strike']
                                 LTP_of_Max_OI_unwinding_Strike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].min()].iloc[0]['CE_lp']
                                 LTP_of_Max_OI_unwinding_Strike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].min()].iloc[0]['PE_lp']
-                            
                                 df_additional_detail = pd.DataFrame(columns = ['CE','PE'])
                                 dic_data = {'CE':Future_LTP}
-
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_Pain_at_Strike}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Ltp_at_Max_Pain_CE,'PE': Ltp_at_Max_Pain_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':AtmStrike}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_at_ATM_CE,'PE':LTP_at_ATM_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Total_OI_CE, 'PE':Total_OI_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Total_OI_Change_CE, 'PE':Total_OI_Change_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_CE,  'PE':Max_OI_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_at_Strike_CE,'PE':Max_OI_at_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_of_Max_OI_Strike_CE,'PE':LTP_of_Max_OI_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_Change_in_OI_addition_CE,'PE':Max_Change_in_OI_addition_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_addition_at_Srike_CE,'PE':Max_OI_addition_at_Srike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_of_Max_OI_addition_Strike_CE, 'PE':LTP_of_Max_OI_addition_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_Change_in_OI_unwinding_CE, 'PE':Max_Change_in_OI_unwinding_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_unwinding_at_Srike_CE, 'PE':Max_OI_unwinding_at_Srike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_of_Max_OI_unwinding_Strike_CE,'PE':LTP_of_Max_OI_unwinding_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
-
                                 oci.range("i3").options(index=False, header=False).value = df_additional_detail
-                                
-                                
-                                
                                 df_oc_pro = df_oc_pro[:2*int(NoOfStrike)+1]
-                                
                                 df_oc_pro.sort_values(by ='strike',inplace = True)
-                                
                                 df_oc_pro['CE_IV'] = None
-                                
                                 df_oc_pro['PE_IV'] = None
-                    
                                 df_oc_pro = df_oc_pro.reindex(['CE_oi','CE_coi','CE_v','CE_IV','CE_lp','CE_pc','CE_bq1','CE_bp1','CE_sp1','CE_sq1','strike','PE_bq1','PE_bp1','PE_sp1','PE_sq1','PE_pc','PE_lp','PE_IV','PE_v','PE_coi','PE_oi'], axis=1)
-                                
                                 SpotPrice = convert_to_float(spot_ltp)
                                 FuturePrice = convert_to_float(future_ltp)
                                 ExpiryDateTime = dt(expiry_input.year, expiry_input.month, expiry_input.day, 0, 0, 0)
-                                
-                                #print(f"SpotPrice = {SpotPrice}, FuturePrice={FuturePrice}, AtmStrike={AtmStrike}, AtmStrikeCallPrice={AtmStrikeCallPrice}, AtmStrikePutPrice={AtmStrikePutPrice}, ExpiryDateTime={ExpiryDateTime}")
-                                
                                 ExpiryType = oci.range("F7").value
                                 GreekMatch = oci.range("F8").value
-                                
                                 if ExpiryType == 'WEEKLY':
                                     ExpiryDateType = ExpType.WEEKLY
                                 else:
                                     ExpiryDateType = ExpType.MONTHLY
-                                
                                 FromDateTime = dt.now() 
                                 if Exchange == 'NFO':
                                     if dt.now().time() > time(15, 30, 0):
                                         FromDateTime = dt(dt.now().year, dt.now().month,dt.now().day, 15, 30, 0)
-                                    
-                                    
                                 if GreekMatch == "SENSIBULL":
                                     tryMatchWith=TryMatchWith.SENSIBULL
                                 else:
                                     tryMatchWith=TryMatchWith.NSE
-                                
                                 dayCountType = DayCountType.CALENDARDAYS
-                                
                                 IvGreeks = CalcIvGreeks( SpotPrice = SpotPrice,  FuturePrice = FuturePrice, AtmStrike = AtmStrike, AtmStrikeCallPrice = AtmStrikeCallPrice, AtmStrikePutPrice = AtmStrikePutPrice, ExpiryDateTime = ExpiryDateTime, ExpiryDateType = ExpiryDateType, FromDateTime = FromDateTime, tryMatchWith = tryMatchWith, dayCountType = dayCountType)
-                
-                                #print(f"SpotPrice={SpotPrice}, FuturePrice={FuturePrice},  AtmStrike={AtmStrike}, AtmStrikeCallPrice={AtmStrikeCallPrice}, AtmStrikePutPrice={AtmStrikePutPrice}, ExpiryDateTime={ExpiryDateTime},  ExpiryDateType={ExpiryDateType}, FromDateTime={FromDateTime}, tryMatchWith={tryMatchWith}")
-                                
                                 for ind in df_oc_pro.index:
-                                    
                                     StrikePrice= convert_to_float(df_oc_pro['strike'][ind])
                                     StrikeCallPrice= convert_to_float(df_oc_pro['CE_lp'][ind])
                                     StrikePutPrice= convert_to_float(df_oc_pro['PE_lp'][ind])
-                                    #print(f"StrikePrice={StrikePrice}, StrikeCallPrice={StrikeCallPrice}, StrikePutPrice={StrikePutPrice}")
                                     Greeks = IvGreeks.GetImpVolAndGreeks( StrikePrice = StrikePrice, StrikeCallPrice = StrikeCallPrice, StrikePutPrice = StrikePutPrice)
-                                    #print(Greeks)
-                                    
-                                    
-                                    
-                                    
                                     if GreekMatch == "NSE":
                                         df_oc_pro.at[ind, "CE_IV"] = round(Greeks["CallIV"],2)
                                         df_oc_pro.at[ind, "PE_IV"] = round(Greeks["PutIV"],2)
                                     else:
                                         df_oc_pro.at[ind, "CE_IV"] = round(Greeks["ImplVol"],2)
                                         df_oc_pro.at[ind, "PE_IV"] = round(Greeks["ImplVol"],2)
-                                
                                 del IvGreeks
                                 df_oc_pro.round({"CE_lp":2, 'PE_lp':2})
-                                #print(df_oc_pro)
-                                
                                 if pre_selected_NoOfStrike != NoOfStrike:
                                     pre_selected_NoOfStrike = NoOfStrike
                                     Option_Chain_Output.range('a3:ae500').value = None
                                     Option_Chain_Output.range("a3:U500").color = (255,255,255)
-                                
                                 df_oc_pro = df_oc_pro.reset_index(drop = True)
                                 ATM_pos = df_oc_pro[df_oc_pro.strike == AtmStrike].index.values[0]
                                 if NoOfStrike * 2 < len(df_oc_pro):
@@ -3378,10 +2696,7 @@ def start_optionchain():
                                     df_oc_pro = df_oc_pro.reset_index(drop=True)
                                     ATM_Row = int(NoOfStrike) + 3
                                     Option_Chain_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
-                        
                                 Option_Chain_Output.range('a3').options(index=False,header=False).value = df_oc_pro
-
-                                # Shade ITM option sides and keep the strike column distinct.
                                 Option_Chain_Output.range(f"k3:k{len(df_oc_pro) + 2}").color = (242,242,242)
                                 for color_index, color_row in df_oc_pro.iterrows():
                                     excel_row = int(color_index) + 3
@@ -3390,28 +2705,24 @@ def start_optionchain():
                                         Option_Chain_Output.range(f"a{excel_row}:j{excel_row}").color = (221,235,247)
                                     elif strike_value > SpotPrice:
                                         Option_Chain_Output.range(f"l{excel_row}:u{excel_row}").color = (221,235,247)
-                                
                             except Exception as e:
                                 Option_Chain_Output.range('a3:ae500').value = None
                                 oci.range('I3:J18').value = None
                                 Message = "Please check the all provided detail to load option chain:" + str(e)
                                 print(Message)
                                 oci.range("F4").value = Message
-                                
                         else:
                             Option_Chain_Output.range('a3:ae500').value = None
                             oci.range('I3:J18').value = None
                             Message = expiry_not_found_message(df_instrument, input_symbol, expiry_input)
                             print(Message)
                             oci.range("F4").value = Message
-                            
                     else:
                         Option_Chain_Output.range('a3:ae500').value = None
                         oci.range('I3:J18').value = None
                         Message = "Please enter the expiry"
                         print(Message)
                         oci.range("F4").value = Message
-                        
                 else:
                     Option_Chain_Output.range('a3:ae500').value = None
                     oci.range('I3:J18').value = None
@@ -3420,7 +2731,6 @@ def start_optionchain():
                     oci.range("F3").value = Message
                     oci.range("F4").value = None
                     oci.range("b2:c100").value = None
-                    
             else:
                 Option_Chain_Output.range('a3:ae500').value = None
                 oci.range('I3:J18').value = None
@@ -3429,21 +2739,19 @@ def start_optionchain():
                 oci.range("F3").value = Message
                 oci.range("F4").value = None
                 oci.range("b2:c100").value = None
-                
         except Exception as e:
             print(f"Excption : {e}")
             pass
         sleep(int(IterationSleep))
-        
+
 def GetToken(Exchange,Symbol, Type = 'FUT' ,Expiry=None,Strike = None):
-    #print(f"GetToken called with parametrer \nExchange = {Exchange}, Symbol = {Symbol}")
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
     try:
         Token = None
         isTokenFound = False
         Symbol = Symbol.upper()
         if Exchange == 'NSE':
-            if Symbol in IndexList:    
+            if Symbol in IndexList:
                 Token = Token_list[Symbol]
                 isTokenFound = True
             else:
@@ -3451,9 +2759,8 @@ def GetToken(Exchange,Symbol, Type = 'FUT' ,Expiry=None,Strike = None):
                 if len(df_ins_temp) > 0:
                     Token = df_ins_temp.iloc[0]['Token']
                     isTokenFound = True
-        
         elif Exchange == 'BSE':
-            if Symbol in IndexList:    
+            if Symbol in IndexList:
                 Token = Token_list[Symbol]
                 isTokenFound = True
             else:
@@ -3487,42 +2794,31 @@ def GetToken(Exchange,Symbol, Type = 'FUT' ,Expiry=None,Strike = None):
                 isTokenFound = True
     except Exception as e:
         print(f"Exception occur in GetToken : {e}")
-    
-    #print(f"Returning value isTokenFound = {isTokenFound}, Token = {Token} ")
     return isTokenFound, Token
-    
+
 def start_optionchain_Pro():
     global subscribe_symbol
     global live_data
     global df_ins_NFO
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
-    
     global subs_lst
     excel_name = get_terminal_workbook()
     oci_pro = excel_name.sheets("Option_Chain_Pro_Input")
     Option_Chain_Pro_Output = excel_name.sheets("Option_Chain_Pro_Output")
     prepare_option_chain_output(Option_Chain_Pro_Output)
-    
-
     oci_pro.range("F3").value = None
     oci_pro.range("F4").value = None
     oci_pro.range("a2:c500").value = None
-    
     Option_Chain_Pro_Output.range('a3:ae500').value = None
-
     IterationSleep = 1
-    
     oci_pro.range("d2").value = "Segment==>>"
     oci_pro.range("d3").value, oci_pro.range("d4").value = "Symbol==>>", "Expiry==>>",
     oci_pro.range("d5").value, oci_pro.range("d6").value = "RefreshRate==>>", "NoOfStrike==>>",
     oci_pro.range("d7").value, oci_pro.range("d8").value = "ExpiryType==>>" , "GreekMatch==>>"
-    
-    pre_selected_segment = pre_selected_symbol = pre_selected_expiry = "" 
+    pre_selected_segment = pre_selected_symbol = pre_selected_expiry = ""
     pre_selected_NoOfStrike = 0
-    
     while True:
         try:
-            # Refresh sheet proxies after an Excel crash/reopen.
             excel_name = get_terminal_workbook()
             oci_pro = excel_name.sheets("Option_Chain_Pro_Input")
             Option_Chain_Pro_Output = excel_name.sheets("Option_Chain_Pro_Output")
@@ -3530,7 +2826,6 @@ def start_optionchain_Pro():
             Exchange = selected_segment[:3]
             if Exchange not in ['NFO','CDS','MCX','BFO']:
                 Exchange = 'NFO'
-            
             oci_pro.range("F2").value = None
             if Exchange == 'NFO':
                 df_instrument = df_ins_NFO
@@ -3542,7 +2837,6 @@ def start_optionchain_Pro():
                 df_instrument = df_ins_BFO
             else:
                 oci_pro.range("F2").value = "Please select correct segment"
-            #print(f"pre : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
             if pre_selected_segment != selected_segment:
                 if Exchange == 'NFO':
                     df_symbol = df_ins_NFO
@@ -3552,33 +2846,23 @@ def start_optionchain_Pro():
                     df_symbol = df_ins_CDS[df_ins_CDS['Instrument'] == 'UNDCUR']
                 if Exchange == 'MCX':
                     df_symbol = df_ins_MCX[df_ins_MCX['Instrument'] == 'OPTFUT']
-                    
                 df_symbol = df_symbol.drop_duplicates( "Symbol" , keep='first')
                 df_symbol =df_symbol[['Symbol']]
                 oci_pro.range("a2:c500").value = None
                 oci_pro.range("a1").options(index=False, header=True).value = df_symbol
-                    
-            pre_selected_segment = selected_segment
-            #print(f"post : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
-            
+                pre_selected_segment = selected_segment
             input_symbol = str(oci_pro.range("E3").value or "").strip()
             if input_symbol:
-
                 df_instrument_temp = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
-                
                 if len(df_instrument_temp) > 0:
                     if pre_selected_symbol != input_symbol:
                         df_exp = df_instrument_temp.drop_duplicates( "Expiry" , keep='first')
-                        
                         df_exp =df_exp[['Expiry','LotSize']]
                         df_exp.sort_values(by = 'Expiry',inplace = True)
                         oci_pro.range("b2:C100").value = None
                         oci_pro.range("b2").options(index=False, header=False).value = df_exp
-                    
-                    pre_selected_symbol = input_symbol                    
-                    
+                        pre_selected_symbol = input_symbol
                     oci_pro.range("F3").value = None
-                    
                     expiry_input = normalize_expiry_input(oci_pro.range("E4").value)
                     valid_expiry = resolve_option_expiry(df_instrument, input_symbol, expiry_input)
                     if valid_expiry is not None and valid_expiry != expiry_input:
@@ -3588,67 +2872,43 @@ def start_optionchain_Pro():
                             f"PRO Option Chain: invalid/blank expiry corrected for "
                             f"{input_symbol}; using {expiry_input.strftime('%d-%m-%Y')}"
                         )
-
-                    #print(f"Option Chain Details: input_symbol={input_symbol},expiry_input={expiry_input}")
                     if expiry_input != None:
-
                         df_instrument_temp = df_instrument_temp[df_instrument_temp.Expiry == expiry_input]
                         if len(df_instrument_temp) > 0:
-
                             oci_pro.range("F4").value = None
                             try:
                                 IterationSleep = oci_pro.range("E5").value
                                 if IterationSleep != None:
                                     IterationSleep = int(IterationSleep)
-                                    oci_pro.range("F5").value = None
+                                oci_pro.range("F5").value = None
                             except:
                                 IterationSleep = 5
                                 Message = "Iteration should be number"
                                 print(Message)
                                 oci_pro.range("F5").value = Message
-
                             symbol_in_template = [itr for itr in OptionChain_template if itr["symbol"] ==input_symbol ]
                             if len(symbol_in_template) == 0:
-                                #print("Symbol Not found, so append the details")
-
                                 ind_df_specific_symbol = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
-                                #print(ind_df_specific_symbol)
-
                                 List_of_Expiry = ind_df_specific_symbol["Expiry"].unique()
-                                #print(List_of_Expiry)
-
                                 Expiry_strikelist_list = []
-
                                 for expiry in List_of_Expiry:
                                     if str( expiry ) != 'NaT' :
-                                        #print(expiry)
                                         ind_df_specific_symbol_expiry = ind_df_specific_symbol[(ind_df_specific_symbol.Expiry == expiry) ]
-                                        #print(ind_df_specific_symbol_expiry)
-
                                         List_of_strikes = ind_df_specific_symbol_expiry["StrikePrice"].unique()
-
                                         LotSize = ind_df_specific_symbol_expiry.iloc[0]["LotSize"]
-                                        #print(LotSize)
-                                        #print(List_of_strikes)
                                         strike_pe_ce_list = []
-
                                         for strike in List_of_strikes:
-                                            #print(f"\nsymbol:{input_symbol},Expiry:{expiry},strike:{strike}")
                                             ind_df_specific_symbol_expiry_pe = ind_df_specific_symbol_expiry[
                                                 (ind_df_specific_symbol_expiry.StrikePrice == str(strike)) & (ind_df_specific_symbol_expiry.OptionType == "PE") ]
                                             if len(ind_df_specific_symbol_expiry_pe) > 0:
                                                 pe_token = ind_df_specific_symbol_expiry_pe.iloc[0]["Token"]
                                             else:
                                                 pe_token = "NA"
-
                                             ind_df_specific_symbol_expiry_ce = ind_df_specific_symbol_expiry[(            ind_df_specific_symbol_expiry.StrikePrice== str(strike))& (            ind_df_specific_symbol_expiry.OptionType == "CE")]
                                             if len(ind_df_specific_symbol_expiry_ce) > 0:
                                                 ce_token = ind_df_specific_symbol_expiry_ce.iloc[0]["Token"]
                                             else:
                                                 ce_token = "NA"
-
-                                            # print(f"symbol:{input_symbol},Expiry:{expiry},strike:{strike},pe_token={pe_token},ce_token={ce_token}")
-
                                             strike_pe_ce_dictionary = dict(
                                                 {
                                                     "strike": strike,
@@ -3656,11 +2916,7 @@ def start_optionchain_Pro():
                                                     "CE_Token": ce_token,
                                                 }
                                             )
-
                                             strike_pe_ce_list.append(strike_pe_ce_dictionary)
-
-                                        # print(strike_pe_ce_list)
-
                                         expiry_stikelist_dict = dict(
                                             {
                                                 "Expiry": expiry,
@@ -3668,70 +2924,49 @@ def start_optionchain_Pro():
                                                 "Strike_list": strike_pe_ce_list,
                                             }
                                         )
-
                                         Expiry_strikelist_list.append(expiry_stikelist_dict)
                                     else:
                                         print(f"Ignoring the wrong date : {expiry}")
-                                # print("\n\n")
-                                # print(Expiry_strikelist_list)
-
                                 Final_dic = dict(
                                     {
                                         "symbol": input_symbol,
                                         "Expiry_Strike_token": Expiry_strikelist_list,
                                     }
                                 )
-
                                 OptionChain_template.append(Final_dic)
-                                # print("\n\n")
-                                #print(OptionChain_template)
                             else:
                                 Message = (
                                     "symbol already available in option chain template"
                                 )
-
                             List_of_Expiry_Strike_token = [
                                 itr["Expiry_Strike_token"]
                                 for itr in OptionChain_template
                                 if itr["symbol"] == input_symbol
                             ][0]
-                            #print(f"\n\n******\n\n{List_of_Expiry_Strike_token}")
-
                             for expiry_strike in List_of_Expiry_Strike_token:
-                                
-                               
                                 if input_symbol not in subs_lst:
-
                                     List_of_particular_expiry_strike = [
                                         itr["Strike_list"]
                                         for itr in List_of_Expiry_Strike_token
                                         if itr["Expiry"] == expiry_strike["Expiry"]
                                     ][0]
-
                                     for strike_dict in List_of_particular_expiry_strike:
                                         print(f"Going to subscribe {input_symbol} strike {strike_dict.get('strike')}")
                                         PE_Token = strike_dict.get("PE_Token")
-                                        # print(PE_Token)
                                         CE_Token = strike_dict.get("CE_Token")
-                                        # print(CE_Token)
                                         if PE_Token != "NA":
-                                            subscribe_new_token(Exchange, PE_Token, source="option_chain")
+                                            subscribe_new_token(Exchange, PE_Token)
                                         if CE_Token != "NA":
-                                            subscribe_new_token(Exchange, CE_Token, source="option_chain")
-
-                            if input_symbol not in subs_lst:
-                                subs_lst.append(input_symbol)
-                                print(f"{input_symbol} subscription completed")
-
+                                            subscribe_new_token(Exchange, CE_Token)
+                                    if input_symbol not in subs_lst:
+                                        subs_lst.append(input_symbol)
+                                        print(f"{input_symbol} subscription completed")
                             pd_oc = pd.DataFrame(columns=[ "CE_token", "CE_oi",  "CE_poi", "CE_toi", "CE_lp", "CE_pc", "CE_bq1","CE_bp1", "CE_sq1", "CE_sp1",  "strike", "PE_bq1", "PE_bp1", "PE_sq1", "PE_sp1", "PE_pc",  "PE_lp",  "PE_toi", "PE_poi", "PE_oi", "PE_token","CE_coi","PE_coi","CE_v","PE_v"] )
-
-                            # prepare option chain
                             List_of_Expiry_Strike_token = [
                                 itr["Expiry_Strike_token"]
                                 for itr in OptionChain_template
                                 if itr["symbol"] == input_symbol
                             ][0]
-                            #print(f"List_of_Expiry_Strike_token = {List_of_Expiry_Strike_token}")
                             try:
                                 Lot_Size = [
                                     itr["LotSize"]
@@ -3743,11 +2978,7 @@ def start_optionchain_Pro():
                                     for itr in List_of_Expiry_Strike_token
                                     if itr["Expiry"] == expiry_input
                                 ][0]
-                                #print(f"****{live_data}")
-                                #print(f"List_of_particular_expiry_strike= {List_of_particular_expiry_strike}")
-                                
                                 isFound, Fut_Token = GetToken(Exchange,input_symbol)
-                                #print(f"isFound {isFound} Fut_Token {Fut_Token}")
                                 if Exchange == 'NFO':
                                     isFound, Spot_Token = GetToken('NSE',input_symbol)
                                     spot_ltp = float(api.get_quotes("NSE", str(Spot_Token)).get("lp"))
@@ -3757,23 +2988,13 @@ def start_optionchain_Pro():
                                 else:    
                                     Spot_Token = Fut_Token
                                     spot_ltp = float(api.get_quotes(Exchange, str(Spot_Token)).get("lp"))
-                                #print(f"Spot_Token {Spot_Token} spot_ltp {spot_ltp}")
                                 future_ltp = float(api.get_quotes(Exchange, str(Fut_Token)).get("lp"))
-                                
-                                #print(f"{input_symbol} spot ltp = {spot_ltp} future ltp = {future_ltp}")
-
                                 for strike_dict in List_of_particular_expiry_strike:
-                                    
                                     Strike = convert_to_float(strike_dict.get("strike"))
-                                    #print(Strike)
                                     PE_Token = strike_dict.get("PE_Token")
                                     PE_Token = str(Exchange)+ "|"  + str(PE_Token)
-                                    #print(PE_Token)
                                     CE_Token = strike_dict.get("CE_Token")
                                     CE_Token =  str(Exchange)+ "|" + str(CE_Token)
-                                    #print(CE_Token)
-                                    
-                                    
                                     try:
                                         CE_oi = live_data[str(CE_Token)].get("oi", 0)
                                     except:
@@ -3782,9 +3003,7 @@ def start_optionchain_Pro():
                                         CE_poi = live_data[str(CE_Token)].get("poi", 0)
                                     except:
                                         CE_poi = 0
-                                    
                                     CE_coi = int(CE_oi) - int(CE_poi)
-                                    
                                     try:
                                         CE_toi = live_data[str(CE_Token)].get("toi", "-")
                                     except:
@@ -3813,7 +3032,6 @@ def start_optionchain_Pro():
                                         CE_sp1 = live_data[str(CE_Token)].get("sp1", "-")
                                     except:
                                         CE_sp1 = "-"
-                                    
                                     try:
                                         PE_oi = live_data[str(PE_Token)].get("oi", 0)
                                     except:
@@ -3822,11 +3040,7 @@ def start_optionchain_Pro():
                                         PE_poi = live_data[str(PE_Token)].get("poi", 0)
                                     except:
                                         PE_poi = 0
-                                    
                                     PE_coi = int(PE_oi) - int(PE_poi)
-                                    
-                                    #print(f"CE COI : {CE_oi} {CE_poi} {CE_coi}")
-                                    #print(f"PE COI : {PE_oi} {PE_poi} {PE_coi}")
                                     try:
                                         PE_toi = live_data[str(PE_Token)].get("toi", "-")
                                     except:
@@ -3855,17 +3069,14 @@ def start_optionchain_Pro():
                                         PE_sp1 = live_data[str(PE_Token)].get("sp1", "-")
                                     except:
                                         PE_sp1 = "-"
-                                    
                                     try:
                                         CE_v = live_data[str(CE_Token)].get("v", 0)
                                     except:
                                         CE_v = 0
-                                        
                                     try:
                                         PE_v = live_data[str(PE_Token)].get("v", 0)
                                     except:
                                         PE_v = 0
-                                    
                                     dic_data = {
                                             "CE_token": CE_Token,
                                             "CE_oi": CE_oi,
@@ -3894,27 +3105,19 @@ def start_optionchain_Pro():
                                             "PE_v":PE_v,
                                         }
                                     pd_oc = pd.concat([pd_oc, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                    
-                                #pd_oc.to_csv("pd_oc.csv")                            
-                                #print(pd_oc)
                                 pd_oc = pd_oc.astype({"strike": float})
                                 pd_oc = pd_oc.sort_values(by="strike", ascending=True)
-
                                 pd_oc = pd_oc.fillna(0)
-                                
                                 pd_oc = pd_oc.astype({"CE_oi": int})
                                 pd_oc = pd_oc.astype({"PE_oi": int})
                                 pd_oc = pd_oc.astype({"CE_poi": int})
                                 pd_oc = pd_oc.astype({"PE_poi": int})
                                 pd_oc = pd_oc.astype({"CE_coi": int})
                                 pd_oc = pd_oc.astype({"PE_coi": int})
-                                
                                 pd_oc = pd_oc.astype({"CE_v": int})
                                 pd_oc = pd_oc.astype({"PE_v": int})
-                                
                                 pd_oc["CE_v"] = pd_oc["CE_v"] / int(Lot_Size)
                                 pd_oc["PE_v"] = pd_oc["PE_v"] / int(Lot_Size)
-                                
                                 pd_oc["CE_oi"] = pd_oc["CE_oi"] / int(Lot_Size)
                                 pd_oc["PE_oi"] = pd_oc["PE_oi"] / int(Lot_Size)
                                 pd_oc["CE_poi"] = pd_oc["CE_poi"] / int(Lot_Size)
@@ -3922,46 +3125,32 @@ def start_optionchain_Pro():
                                 pd_oc["CE_coi"] = pd_oc["CE_coi"] / int(Lot_Size)
                                 pd_oc["PE_coi"] = pd_oc["PE_coi"] / int(Lot_Size)
                                 pd_oc["OI_SUM"] = pd_oc["CE_oi"] + pd_oc["PE_oi"]
-
-                                #print(pd_oc)
-                                
                                 df_oc_pro = pd_oc
-                                
                                 try:
                                     NoOfStrike = int(oci_pro.range("E6").value)
                                 except Exception as e:
                                     NoOfStrike = 100
-                                
                                 df_oc_pro['strike_diff'] = abs(df_oc_pro['strike'] - spot_ltp)
-            
                                 df_oc_pro.sort_values(by = 'strike_diff',inplace = True)
-                                
-                                #print(f"\n\n***\n\n{df_oc_pro}")
                                 AtmStrike = convert_to_float(df_oc_pro.iloc[0]['strike'])
                                 AtmStrikeCallPrice = convert_to_float(df_oc_pro.iloc[0]['CE_lp'])
                                 AtmStrikePutPrice = convert_to_float(df_oc_pro.iloc[0]['PE_lp'])
-                                
-                                #additional detail related to dump on input page
                                 Future_LTP = future_ltp
                                 Max_Pain_at_Strike = df_oc_pro[df_oc_pro.OI_SUM == df_oc_pro["OI_SUM"].max()].iloc[0]['strike']
                                 Ltp_at_Max_Pain_CE = df_oc_pro[df_oc_pro.OI_SUM == df_oc_pro["OI_SUM"].max()].iloc[0]['CE_lp']
                                 Ltp_at_Max_Pain_PE = df_oc_pro[df_oc_pro.OI_SUM == df_oc_pro["OI_SUM"].max()].iloc[0]['PE_lp']
-                                #ATM_Strike = 
                                 LTP_at_ATM_CE = df_oc_pro[df_oc_pro.strike == AtmStrike].iloc[0]['CE_lp']
                                 LTP_at_ATM_PE = df_oc_pro[df_oc_pro.strike == AtmStrike].iloc[0]['PE_lp']
                                 Total_OI_CE = df_oc_pro["CE_oi"].sum()
                                 Total_OI_PE = df_oc_pro["PE_oi"].sum()
-                                
                                 Max_OI_CE = df_oc_pro["CE_oi"].max()
                                 Max_OI_PE = df_oc_pro["PE_oi"].max()
                                 Max_OI_at_Strike_CE = df_oc_pro[df_oc_pro.CE_oi == df_oc_pro["CE_oi"].max()].iloc[0]['strike']
                                 Max_OI_at_Strike_PE = df_oc_pro[df_oc_pro.PE_oi == df_oc_pro["PE_oi"].max()].iloc[0]['strike']
                                 LTP_of_Max_OI_Strike_CE = df_oc_pro[df_oc_pro.CE_oi == df_oc_pro["CE_oi"].max()].iloc[0]['CE_lp']
                                 LTP_of_Max_OI_Strike_PE = df_oc_pro[df_oc_pro.PE_oi == df_oc_pro["PE_oi"].max()].iloc[0]['PE_lp']
-
                                 Total_OI_Change_CE = df_oc_pro["CE_coi"].sum()
                                 Total_OI_Change_PE = df_oc_pro["PE_coi"].sum()
-                                
                                 Max_Change_in_OI_addition_CE = df_oc_pro["CE_coi"].max()
                                 Max_Change_in_OI_addition_PE = df_oc_pro["PE_coi"].max()
                                 Max_OI_addition_at_Srike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].max()].iloc[0]['strike']
@@ -3974,131 +3163,81 @@ def start_optionchain_Pro():
                                 Max_OI_unwinding_at_Srike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].min()].iloc[0]['strike']
                                 LTP_of_Max_OI_unwinding_Strike_CE = df_oc_pro[df_oc_pro["CE_coi"] == df_oc_pro["CE_coi"].min()].iloc[0]['CE_lp']
                                 LTP_of_Max_OI_unwinding_Strike_PE = df_oc_pro[df_oc_pro["PE_coi"] == df_oc_pro["PE_coi"].min()].iloc[0]['PE_lp']
-                            
                                 df_additional_detail = pd.DataFrame(columns = ['CE','PE'])
                                 dic_data = {'CE':Future_LTP}
-
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_Pain_at_Strike}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Ltp_at_Max_Pain_CE,'PE': Ltp_at_Max_Pain_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':AtmStrike}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_at_ATM_CE,'PE':LTP_at_ATM_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Total_OI_CE, 'PE':Total_OI_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Total_OI_Change_CE, 'PE':Total_OI_Change_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_CE,  'PE':Max_OI_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_at_Strike_CE,'PE':Max_OI_at_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_of_Max_OI_Strike_CE,'PE':LTP_of_Max_OI_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_Change_in_OI_addition_CE,'PE':Max_Change_in_OI_addition_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_addition_at_Srike_CE,'PE':Max_OI_addition_at_Srike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_of_Max_OI_addition_Strike_CE, 'PE':LTP_of_Max_OI_addition_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_Change_in_OI_unwinding_CE, 'PE':Max_Change_in_OI_unwinding_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':Max_OI_unwinding_at_Srike_CE, 'PE':Max_OI_unwinding_at_Srike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
                                 dic_data = {'CE':LTP_of_Max_OI_unwinding_Strike_CE,'PE':LTP_of_Max_OI_unwinding_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                
-
                                 oci_pro.range("i3").options(index=False, header=False).value = df_additional_detail
-                                
-                                
-                                
                                 df_oc_pro = df_oc_pro[:2*int(NoOfStrike)+1]
-                                
                                 df_oc_pro.sort_values(by ='strike',inplace = True)
-                                
                                 df_oc_pro['CE_IV'] = None
-                                
                                 df_oc_pro['PE_IV'] = None
-                    
                                 df_oc_pro = df_oc_pro.reindex(['CE_oi','CE_coi','CE_v','CE_IV','CE_lp','CE_pc','CE_bq1','CE_bp1','CE_sp1','CE_sq1','strike','PE_bq1','PE_bp1','PE_sp1','PE_sq1','PE_pc','PE_lp','PE_IV','PE_v','PE_coi','PE_oi'], axis=1)
-                                
                                 SpotPrice = convert_to_float(spot_ltp)
                                 FuturePrice = convert_to_float(future_ltp)
                                 ExpiryDateTime = dt(expiry_input.year, expiry_input.month, expiry_input.day, 0, 0, 0)
-                                
-                                #print(f"SpotPrice = {SpotPrice}, FuturePrice={FuturePrice}, AtmStrike={AtmStrike}, AtmStrikeCallPrice={AtmStrikeCallPrice}, AtmStrikePutPrice={AtmStrikePutPrice}, ExpiryDateTime={ExpiryDateTime}")
-                                
                                 ExpiryType = oci_pro.range("F7").value
                                 GreekMatch = oci_pro.range("F8").value
-                                
                                 if ExpiryType == 'WEEKLY':
                                     ExpiryDateType = ExpType.WEEKLY
                                 else:
                                     ExpiryDateType = ExpType.MONTHLY
-                                
                                 FromDateTime = dt.now() 
                                 if Exchange == 'NFO':
                                     if dt.now().time() > time(15, 30, 0):
                                         FromDateTime = dt(dt.now().year, dt.now().month,dt.now().day, 15, 30, 0)
-                                    
-                                    
                                 if GreekMatch == "SENSIBULL":
                                     tryMatchWith=TryMatchWith.SENSIBULL
                                 else:
                                     tryMatchWith=TryMatchWith.NSE
-                                
                                 dayCountType = DayCountType.CALENDARDAYS
-                                
                                 IvGreeks = CalcIvGreeks( SpotPrice = SpotPrice,  FuturePrice = FuturePrice, AtmStrike = AtmStrike, AtmStrikeCallPrice = AtmStrikeCallPrice, AtmStrikePutPrice = AtmStrikePutPrice, ExpiryDateTime = ExpiryDateTime, ExpiryDateType = ExpiryDateType, FromDateTime = FromDateTime, tryMatchWith = tryMatchWith, dayCountType = dayCountType)
-                
-                                #print(f"SpotPrice={SpotPrice}, FuturePrice={FuturePrice},  AtmStrike={AtmStrike}, AtmStrikeCallPrice={AtmStrikeCallPrice}, AtmStrikePutPrice={AtmStrikePutPrice}, ExpiryDateTime={ExpiryDateTime},  ExpiryDateType={ExpiryDateType}, FromDateTime={FromDateTime}, tryMatchWith={tryMatchWith}")
-                                
                                 for ind in df_oc_pro.index:
-                                    
                                     StrikePrice= convert_to_float(df_oc_pro['strike'][ind])
                                     StrikeCallPrice= convert_to_float(df_oc_pro['CE_lp'][ind])
                                     StrikePutPrice= convert_to_float(df_oc_pro['PE_lp'][ind])
-                                    #print(f"StrikePrice={StrikePrice}, StrikeCallPrice={StrikeCallPrice}, StrikePutPrice={StrikePutPrice}")
                                     Greeks = IvGreeks.GetImpVolAndGreeks( StrikePrice = StrikePrice, StrikeCallPrice = StrikeCallPrice, StrikePutPrice = StrikePutPrice)
-                                    #print(Greeks)
-                                    
-                                    
-                                    
-                                    
                                     if GreekMatch == "NSE":
                                         df_oc_pro.at[ind, "CE_IV"] = round(Greeks["CallIV"],2)
                                         df_oc_pro.at[ind, "PE_IV"] = round(Greeks["PutIV"],2)
                                     else:
                                         df_oc_pro.at[ind, "CE_IV"] = round(Greeks["ImplVol"],2)
                                         df_oc_pro.at[ind, "PE_IV"] = round(Greeks["ImplVol"],2)
-                                
                                 del IvGreeks
                                 df_oc_pro.round({"CE_lp":2, 'PE_lp':2})
-                                #print(df_oc_pro)
-                                
                                 if pre_selected_NoOfStrike != NoOfStrike:
                                     pre_selected_NoOfStrike = NoOfStrike
                                     Option_Chain_Pro_Output.range('a3:ae500').value = None
                                     Option_Chain_Pro_Output.range("a3:U500").color = (255,255,255)
-                                
                                 df_oc_pro = df_oc_pro.reset_index(drop = True)
                                 ATM_pos = df_oc_pro[df_oc_pro.strike == AtmStrike].index.values[0]
                                 if NoOfStrike * 2 < len(df_oc_pro):
@@ -4106,10 +3245,7 @@ def start_optionchain_Pro():
                                     df_oc_pro = df_oc_pro.reset_index(drop=True)
                                     ATM_Row = int(NoOfStrike) + 3
                                     Option_Chain_Pro_Output.range(f"a{ATM_Row}:U{ATM_Row}").color = (46,132,198)
-                        
                                 Option_Chain_Pro_Output.range('a3').options(index=False,header=False).value = df_oc_pro
-
-                                # Shade ITM option sides and keep the strike column distinct.
                                 Option_Chain_Pro_Output.range(f"k3:k{len(df_oc_pro) + 2}").color = (242,242,242)
                                 for color_index, color_row in df_oc_pro.iterrows():
                                     excel_row = int(color_index) + 3
@@ -4118,28 +3254,24 @@ def start_optionchain_Pro():
                                         Option_Chain_Pro_Output.range(f"a{excel_row}:j{excel_row}").color = (221,235,247)
                                     elif strike_value > SpotPrice:
                                         Option_Chain_Pro_Output.range(f"l{excel_row}:u{excel_row}").color = (221,235,247)
-                                
                             except Exception as e:
                                 Option_Chain_Pro_Output.range('a3:ae500').value = None
                                 oci_pro.range('I3:J18').value = None
                                 Message = "Please check the all provided detail to load option chain:" + str(e)
                                 print(Message)
                                 oci_pro.range("F4").value = Message
-                                
                         else:
                             Option_Chain_Pro_Output.range('a3:ae500').value = None
                             oci_pro.range('I3:J18').value = None
                             Message = expiry_not_found_message(df_instrument, input_symbol, expiry_input)
                             print(Message)
                             oci_pro.range("F4").value = Message
-                            
                     else:
                         Option_Chain_Pro_Output.range('a3:ae500').value = None
                         oci_pro.range('I3:J18').value = None
                         Message = "Please enter the expiry"
                         print(Message)
                         oci_pro.range("F4").value = Message
-                        
                 else:
                     Option_Chain_Pro_Output.range('a3:ae500').value = None
                     oci_pro.range('I3:J18').value = None
@@ -4148,7 +3280,6 @@ def start_optionchain_Pro():
                     oci_pro.range("F3").value = Message
                     oci_pro.range("F4").value = None
                     oci_pro.range("b2:c100").value = None
-                    
             else:
                 Option_Chain_Pro_Output.range('a3:ae500').value = None
                 oci_pro.range('I3:J18').value = None
@@ -4157,7 +3288,6 @@ def start_optionchain_Pro():
                 oci_pro.range("F3").value = Message
                 oci_pro.range("F4").value = None
                 oci_pro.range("b2:c100").value = None
-                
         except Exception as e:
             print(f"Excption : {e}")
             pass
@@ -4171,22 +3301,15 @@ def CloseTrade():
     print("I am inside CloseTrade")
     try:
         df_open_position_net,OverAllPnL  = get_position()
-
         price_type = "MKT"
         price = 0.0
-        
         df_open_position_net['Net Quantity'] = df_open_position_net['Net Quantity'].astype('int')
-        df_open_position_net = df_open_position_net[df_open_position_net['Net Quantity']!= 0 ] #make it 0 
-        
+        df_open_position_net = df_open_position_net[df_open_position_net['Net Quantity']!= 0 ]
         if(len(df_open_position_net) > 0):
-            
             df_position_net_short = df_open_position_net[df_open_position_net['Net Quantity'] < 0]
-            
             if(len(df_position_net_short) > 0 ):
                 for ind in df_position_net_short.index:
-
                     try:
-                    
                         api.place_order(
                             buy_or_sell='B',
                             product_type=df_position_net_short['Product'][ind],
@@ -4201,16 +3324,12 @@ def CloseTrade():
                             algo_id=SHOONYA_ALGO_ID,
                             remarks="Python_Trader_UserSelected_squareoff",
                         )
-                    
                     except Exception as e:
                         Message =  str(e) + " : Exception occur in Finvasia order placement"
                         print(Message) 
-            
             df_position_net_long = df_open_position_net[df_open_position_net['Net Quantity'] > 0]
-            
             if(len(df_position_net_long) > 0 ):
                 for ind in df_position_net_long.index:
-                    
                     try:
                         api.place_order(
                             buy_or_sell='S',
@@ -4225,11 +3344,9 @@ def CloseTrade():
                             retention="DAY",
                             algo_id=SHOONYA_ALGO_ID,
                             remarks="Python_Trader_UserSelected_squareoff",)
-                        
                     except Exception as e:
                         Message =  str(e) + " : Exception occur in finvasia order placement"
                         print(Message)
-
         else:
             Message = "No Open position found"
             print(Message)
@@ -4240,44 +3357,35 @@ df_orderbook = pd.DataFrame()
 df_openPosition = pd.DataFrame()
 
 def start_Open_Position():
-    
     excel_op = get_terminal_workbook()
     op_op = excel_op.sheets("OpenPosition")
     op_tt = get_live_trade_sheet(excel_op)
     op_hold = excel_op.sheets("Holdings")
     op_config = get_login_settings_sheet(excel_op)
     op_ob = excel_op.sheets("OrderBook")
-    
     isTelegramEnable = False
     if op_config.range("E3").value == True:
         isTelegramEnable = True
-    
     isVoiceEnable = False
     if op_config.range("E6").value == True:
         isVoiceEnable = True
-        
     op_op.range(f"d2").value = False
     op_op.range(f"e2").value = 0
     op_op.range("b3:az1000").value = None
     op_hold.range("a1:w500").value  = None
-        
     op_ob.range("b1:az100").value = None
-    
     global LimitOrderBook
     global df_orderbook, df_openPosition
     global api
     global Telegram_Message, Voice_Message
-    
     while True:
         try:
-            # Rebind all worksheet proxies to the current Excel process.
             excel_op = get_terminal_workbook()
             op_op = excel_op.sheets("OpenPosition")
             op_tt = get_live_trade_sheet(excel_op)
             op_hold = excel_op.sheets("Holdings")
             op_ob = excel_op.sheets("OrderBook")
             get_limits = api.get_limits()
-            
             op_tt.range("a2").value = get_limits['cash']
             try:
                 op_tt.range("b2").value = get_limits['marginused']
@@ -4287,32 +3395,23 @@ def start_Open_Position():
                 op_tt.range("b2").value = 0
                 op_tt.range("c2").value = 0
                 op_tt.range("d2").value = 0
-             
-             
             df_openPosition, OverAllPnL  = get_position()
             if(len(df_openPosition) > 0):
                 op_op.range(f"a2").value = OverAllPnL
                 op_tt.range(f"f2").value = OverAllPnL
                 if excel_op.sheets.active.name == "OpenPosition":
                     op_op.range("b3").options(index=False,header=True).value = df_openPosition
-                    
                     KillSwitch = op_op.range(f"d2").value
                     Reconfirm = int(op_op.range(f"e2").value)
-                    #print(f"KillSwitch={KillSwitch} Reconfirm={Reconfirm}")
                     if(KillSwitch == 'Execute' and Reconfirm == 1):
                         CloseTrade()        
                         op_op.range(f"d2").value = False
                         op_op.range(f"e2").value = 0
                     else:
-                        
-                        #print("check if any open order needs to be cancel")
                         UserAction = op_op.range(f"a{4}:a{3 + len(df_openPosition)}").value
-                        #print(f"UserAction = {UserAction}")
                         if UserAction != None:
                             for i in range (0,len(df_openPosition)):
-                                #print(f"{i} : {UserAction[i]}")
                                 if UserAction[i] == 'Square_Off' or UserAction[i] == 'S':
-                                    #print(f"*{df_openPosition}**")
                                     exchange = df_openPosition['Exchange'][i]
                                     tradingsymbol = df_openPosition['Symbol'][i]
                                     if df_openPosition['Net Quantity'][i] < 0:
@@ -4324,7 +3423,6 @@ def start_Open_Position():
                                     tag = "PT individual Exit"
                                     price_type = "MKT"
                                     price = 0.0
-                                    #print(f"squareoff {tradingsymbol}  {exchange} {product} {quantity}{transaction_type}")
                                     try:
                                         if not BROKER_LOGIN_OK or not internet_is_available() or SYSTEM_EXCEL_OK is False:
                                             raise RuntimeError("Live square-off blocked: broker login, internet or Excel unavailable")
@@ -4337,7 +3435,6 @@ def start_Open_Position():
             if not is_excel_connection_lost():
                 print(f"Exception occur in OpenPosition : {e}")
             pass
-        
         try:
             if excel_op.sheets.active.name == "Holdings":
                 df_holding = getholdings()
@@ -4347,38 +3444,26 @@ def start_Open_Position():
             if not is_excel_connection_lost():
                 print(f"Exception occur in Holdings : {e}")
             pass
-        
         try:
             if excel_op.sheets.active.name == "OrderBook":
                 df_orderbook = get_order_book()
                 if (len(df_orderbook) > 0):
                     op_ob.range("b1").options(index=False,header=True).value = df_orderbook
-                    
-                    
-                    #check if any open order needs to be cancel
                     UserAction = op_ob.range(f"a{2}:a{1 + len(df_orderbook)}").value
-                    #print(f"UserAction = {UserAction}")
                     if UserAction is not None:
                         for i in range (0,len(df_orderbook)):
-                            #print(f"{i} : {UserAction[i]}")
                             if UserAction[i] == 'CANCEL' or UserAction[i] == 'C':
-                                #print(f"Cancel order id {df_orderbook['order_id'][i]} variety {df_orderbook['variety'][i]}")
                                 try:
                                     api.cancel_order(orderno=df_orderbook['Order No'][i])
                                 except Exception as e:
                                     print(f"Order can't be cancelled with reason : {e}")
                                     pass
                                 op_ob.range(f"a{2+i}").value = None
-                
         except Exception as e:
             if not is_excel_connection_lost():
                 print(f"Exception occur in OrderBook : {e}")
             pass
-        
         try:
-            # Fetch the broker order book once per cycle, not once per order.
-            # This prevents dozens of pending symbols from flooding the API and
-            # competing with new order submissions.
             order_book_snapshot = get_order_book()
             for key, value in list(LimitOrderBook.items()):
                 if value.get('status') not in ('COMPLETE', 'REJECTED', 'CANCELLED', 'CANCELED'):
@@ -4389,29 +3474,21 @@ def start_Open_Position():
                         value['Executed_price'] = Executed_price
                     if status and status not in ("", "PENDING", "OPEN"):
                         value['Remarks'] = value.get('Remarks') or status
-                update_side_order_display(
-                    key, value.get('status'), value.get('Executed_price'), value.get('Remarks')
-                )
+                    update_side_order_display(
+                        key, value.get('status'), value.get('Executed_price'), value.get('Remarks')
+                    )
         except Exception as e:
             print(f"Order status refresh failed without stopping live quotes/orders: {e}")
-
-        #print(f"Telegram_Message queue = {Telegram_Message}")
         try:
             if isTelegramEnable:
                 if len(Telegram_Message) > 0:
                     SendMessageToTelegram(Telegram_Message[0])
                     del Telegram_Message[0]
-        
-        
         except Exception as e:
-            #print(f"Exception in telegram Send Message : {e}")
             pass
-            
-        # Trade/order voice queue intentionally disabled; direct system alerts remain active.
-def getholdings():  
-    #print("I am inside getholdings")
-    global api
 
+def getholdings():  
+    global api
     df_holding = pd.DataFrame(columns=['Exchange','Name','Holding quantity','Non Poa display quantity','Average price'])
     holdings = api.get_holdings()
     for holding in holdings:
@@ -4423,8 +3500,6 @@ def getholdings():
         except Exception as e:
             npoadqty = 0
         upldprc = holding['upldprc']
-        
-        #print(f"{exch} {tsym} {holdqty} {npoadqty} {upldprc}")
         dic_data = {'Exchange':exch,'Name':tsym,'Holding quantity':holdqty,'Non Poa display quantity':npoadqty,'Average price':upldprc}
         df_holding = pd.concat([df_holding, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
     return df_holding
@@ -4433,62 +3508,44 @@ def StartThread():
     excel_name = get_terminal_workbook()
     Config_sheet = get_login_settings_sheet(excel_name)
     try:
-        
-        # Define the threads and put them in an array
         threads = []
-        
         if Config_sheet.range("E2").value == True:
             threads.append(Thread(target=start_Trade_Terminal))
             threads.append(Thread(target=start_Open_Position))      
-           
         if Config_sheet.range("E4").value == True:
             threads.append(Thread(target=start_optionchain))
-        
         if Config_sheet.range("E5").value == True:
             threads.append(Thread(target=start_optionchain_Pro))
-            
         if len(threads) != 0 :    
-            # Func1 and Func2 run in separate threads
             for thread in threads:
                 thread.start()
-
-            # Wait until both Func1 and Func2 have finished
             for thread in threads:
                 thread.join()
         else:
             print("Please select atlease one feature in config and restart the algo")
-        
     except Exception as e:
         Message = str(e) + " : Exception occur"
         print(Message)
 
 print("Python Trader Excel Based Terminal program initialised")
 if Shoonya_login() == 1:
-    # Start the monitor only after the main thread has attached to the workbook.
-    # This prevents the monitor racing startup and opening a second Excel copy.
     Thread(target=system_health_monitor, daemon=True).start()
     LoadInstrument_token()
-    
-    
     api.start_websocket(
         order_update_callback=event_handler_order_update,
         subscribe_callback=event_handler_quote_update,
         socket_open_callback=open_callback,
         socket_close_callback=event_handler_socket_closed,
     )
-
     for websocket_attempt in range(60):
         if feed_opened:
             break
         print("Trying to connect WebSocket...")
         sleep(1)
-
     if not feed_opened:
         Text2Speech("Warning. Shoonya live data connection failed. Live trading will not start.")
         raise SystemExit("Shoonya WebSocket did not connect within 60 seconds.")
-
     print("Connected to WebSocket...")
-
     StartThread()
     print("Enjoy the automation...")
 else:
