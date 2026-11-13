@@ -1108,6 +1108,22 @@ def get_order_book():
         print(f"Exception occur in get_order_book : {exc}")
         return empty_order_book
 
+def _extract_symbol(value):
+    """Normalize a Trade_Terminal cell returned by xlwings to EXCHANGE:SYMBOL text.
+
+    xlwings normally returns a flat list for a one-column range, but wrappers,
+    mocked ranges and some recovery paths can provide nested list/tuple values.
+    Unwrap those safely instead of converting a list to its Python repr.
+    """
+    while isinstance(value, (list, tuple)):
+        if not value:
+            return ""
+        value = value[0]
+    if value is None:
+        return ""
+    return str(value).strip().upper()
+
+
 def GetToken_UsingSymbol(exchange, tradingsymbol):
     """Resolve an exact exchange/trading-symbol match; never take searchscrip's first hit blindly."""
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
@@ -1388,11 +1404,11 @@ def register_side_order_display(symbol, side, order_id, display_row=None):
             symbols = sheet.range("A4:A1000").value
             row_number = next(
                 (row_index + 4 for row_index, value in enumerate(symbols)
-                 if str(value or "").strip() == str(symbol).strip()),
+                 if _extract_symbol(value) == str(symbol).strip().upper()),
                 None,
             )
         else:
-            actual_symbol = str(sheet.range(f"A{row_number}").value or "").strip()
+            actual_symbol = _extract_symbol(sheet.range(f"A{row_number}").value)
             if actual_symbol != str(symbol).strip():
                 raise ValueError(
                     f"Order row mismatch: row {row_number} contains {actual_symbol!r}, "
@@ -1913,8 +1929,9 @@ def start_Trade_Terminal():
                     market_rows = []
                     for market_symbol in market_symbols:
                         values = [None] * 11
-                        if market_symbol:
-                            token_key = Symbol_Token.get(str(market_symbol).strip().upper())
+                                        symbol_key = _extract_symbol(market_symbol)
+                        if symbol_key:
+                            token_key = Symbol_Token.get(symbol_key)
                             if token_key:
                                 with LIVE_DATA_LOCK:
                                     quote_snapshot = dict(live_data.get(token_key, {}))
@@ -1988,8 +2005,8 @@ def start_Trade_Terminal():
                     )
                 else:
                     active_symbols = [
-                        str(value).strip().upper() for value in tt.range("A4:A1000").value
-                        if value is not None and str(value).strip()
+                        _extract_symbol(value) for value in tt.range("A4:A1000").value
+                        if _extract_symbol(value)
                     ]
                     with subscription_lock:
                         terminal_subscribed.clear()
@@ -2027,9 +2044,8 @@ def start_Trade_Terminal():
             for i in symbols:
                 lst = [None, None, None, None,None, None, None, None, None,None,None]
                 indicator_row = [None, None, None, None, None, None, "", ""]
-                # Excel cells may contain trailing spaces or inconsistent case.
-                # Use one canonical key for lookup, subscription and quote writing.
-                i = str(i).strip().upper() if i is not None else ""
+                # Normalize scalar and nested xlwings values consistently.
+                i = _extract_symbol(i)
                 if i:
                     with subscription_lock:
                         retry_ready = _monotonic() >= subscription_retry_after.get(i, 0.0)
