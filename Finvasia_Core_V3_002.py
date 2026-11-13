@@ -160,6 +160,23 @@ def ensure_excel_com_initialized():
 
 
 
+def expiry_not_found_message(df_instrument, symbol, expiry_input):
+    """Explain a rejected expiry: show the date entered and the valid upcoming expiries."""
+    base = "Please enter correct expiry in dd-mm-YYYY (date format)"
+    try:
+        today = date.today()
+        valid = set()
+        rows = df_instrument[(df_instrument.Symbol == symbol) & (df_instrument['OptionType'].isin(['CE', 'PE']))]
+        for value in rows['Expiry'].dropna().unique():
+            value = value.date() if hasattr(value, "date") else value
+            if value >= today:
+                valid.add(value)
+        upcoming = ", ".join(v.strftime("%d-%m-%Y") for v in sorted(valid)[:4])
+        return f"{base}. {expiry_input.strftime('%d-%m-%Y')} has no contracts for {symbol}. Upcoming: {upcoming or 'none found'}"
+    except Exception:
+        return base
+
+
 def is_excel_busy_error(error):
     """Return True for transient Excel/OLE automation-busy errors."""
     message = str(error).lower()
@@ -297,10 +314,12 @@ def get_terminal_workbook():
                     print(f"Excel reconnect attempt failed; will retry: {locals().get('last_reconnect_error', 'No active Excel instance')}")
                     _excel_com_state.reconnect_error_reported = True
 
-            else:
-                # No Excel process at all (typical after a crash). Relaunch
-                # Excel once and open the workbook. The cooldown stops a
-                # failing launch from spawning Excel windows every 8 seconds.
+            if _excel_com_state.workbook is None:
+                # Reached when no Excel process exists (typical after a crash)
+                # OR a dead/hung Excel process is still listed but could not
+                # open the workbook. Relaunch Excel and open the workbook. The
+                # cooldown stops a failing launch from spawning Excel windows
+                # every 8 seconds.
                 global _LAST_EXCEL_RELAUNCH
                 now = _monotonic()
                 if _LAST_EXCEL_RELAUNCH == 0.0 or now - _LAST_EXCEL_RELAUNCH >= EXCEL_RELAUNCH_COOLDOWN_SEC:
@@ -2715,7 +2734,7 @@ def start_optionchain():
                         else:
                             Option_Chain_Output.range('a3:ae500').value = None
                             oci.range('I3:J18').value = None
-                            Message = "Please enter correct expiry in dd-mm-YYYY (date format)"
+                            Message = expiry_not_found_message(df_instrument, input_symbol, expiry_input)
                             print(Message)
                             oci.range("F4").value = Message
                             
@@ -3437,7 +3456,7 @@ def start_optionchain_Pro():
                         else:
                             Option_Chain_Pro_Output.range('a3:ae500').value = None
                             oci_pro.range('I3:J18').value = None
-                            Message = "Please enter correct expiry in dd-mm-YYYY (date format)"
+                            Message = expiry_not_found_message(df_instrument, input_symbol, expiry_input)
                             print(Message)
                             oci_pro.range("F4").value = Message
                             
