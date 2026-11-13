@@ -888,6 +888,16 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     product = product_map[selected_product_type]
     Message = "Order Details : buy_or_sell = " + str(buy_or_sell[0]) + ", product_type = " + str(product)+ ", exchange = " + str(exchange)+ ", tradingsymbol = " + str(tradingsymbol)+ ", quantity = " + str(quantity)+ ", price_type = " + str(price_type)+ ", price = " + str(price)+ ", trigger_price = " + str(trigger_price)
     logger.info(Message)
+    def _show_order_failure(status_text):
+        # Keep the broker's exact response visible in this side's Excel status.
+        if display_row is not None:
+            try:
+                side_status_col = "S" if str(buy_or_sell).strip().upper() == "BUY" else "Y"
+                status_sheet = get_live_trade_sheet(get_terminal_workbook())
+                status_sheet.range(f"{side_status_col}{int(display_row)}").value = str(status_text)[:300]
+            except Exception as status_error:
+                logger.error(f"Could not display broker order failure: {status_error}")
+
     try:
         order_response = api.place_order(
             buy_or_sell=buy_or_sell[0],
@@ -904,27 +914,29 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
             remarks="Python_Trader",
         )
     except Exception as exc:
-        Message = f"ORDER SUBMISSION ERROR for {tradingsymbol}: {exc}"
+        Message = f"BROKER SUBMISSION ERROR for {tradingsymbol}: {exc}"
         print(Message)
-        logger.error(Message)
+        logger.exception(Message)
+        _show_order_failure(Message)
         return None
+    logger.info(f"Raw Shoonya order response for {tradingsymbol}: {order_response!r}")
     if not isinstance(order_response, dict):
         Message = (
-            f"ORDER NOT CONFIRMED for {tradingsymbol}: Shoonya returned "
-            f"{order_response!r}; check broker OrderBook before retrying."
+            f"BROKER UNCONFIRMED for {tradingsymbol}: Shoonya returned "
+            f"{order_response!r}; verify broker OrderBook before retrying."
         )
         print(Message)
         logger.error(Message)
+        _show_order_failure(Message)
         return None
     order_id = order_response.get("norenordno") or order_response.get("order_id")
     broker_stat = str(order_response.get("stat", "")).strip().lower()
-    if not order_id or broker_stat in ("not_ok", "not ok", "error", "failed"):
-        Message = (
-            f"ORDER REJECTED/UNCONFIRMED for {tradingsymbol}: "
-            f"{order_response.get('emsg') or order_response}"
-        )
+    if not order_id or broker_stat not in ("ok", "success"):
+        broker_reason = order_response.get("emsg") or order_response.get("remarks") or repr(order_response)
+        Message = f"BROKER REJECTED/UNCONFIRMED for {tradingsymbol}: {broker_reason}"
         print(Message)
         logger.error(Message)
+        _show_order_failure(Message)
         return None
     Message = (
         f"Broker accepted order for {tradingsymbol} {quantity} quantity "
@@ -1368,7 +1380,9 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             product_type, display_row=row_number
         )
         if order_id is None:
-            sheet.range(f"{status_col}{row_number}").value = "SUBMISSION FAILED/UNCONFIRMED"
+            current_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
+            if not current_status.startswith(("BROKER REJECTED", "BROKER UNCONFIRMED", "BROKER SUBMISSION ERROR")):
+                sheet.range(f"{status_col}{row_number}").value = "SUBMISSION FAILED/UNCONFIRMED"
             print(f"{side} order for {symbol} was not confirmed; check Shoonya OrderBook before retrying.")
             return
         register_pending_order(order_id)
