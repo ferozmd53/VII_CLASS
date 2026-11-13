@@ -2921,7 +2921,7 @@ def start_optionchain_Pro():
             #print(f"post : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
             
             input_symbol = str(oci_pro.range("E3").value or "").strip()
-            if input_symbol != None:
+            if input_symbol:
 
                 df_instrument_temp = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
                 
