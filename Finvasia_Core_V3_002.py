@@ -823,19 +823,12 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     exchange = symbol[:3]
     
     if order_type == 'MARKET':
-        if price is None:
-            print(f"Live LIMIT order blocked for {tradingsymbol}: valid live LTP is unavailable.")
-            return None
-        try:
-            price = float(price)
-        except (TypeError, ValueError):
-            print(f"Live LIMIT order blocked for {tradingsymbol}: invalid LTP {price!r}.")
-            return None
-        if not np.isfinite(price) or price <= 0:
-            print(f"Live LIMIT order blocked for {tradingsymbol}: invalid LTP {price!r}.")
-            return None
+        # A MARKET selection must reach Shoonya as a true MKT order.
+        # Do not convert it to LMT at the last traded price; that can leave
+        # the order pending whenever the best bid/ask moves away from the LTP.
+        price = 0.0
         trigger_price = None
-        price_type = "LMT"
+        price_type = "MKT"
     elif order_type == 'LIMIT':
         if price is None:
             print(f"LIMIT order blocked for {tradingsymbol}: price is missing.")
@@ -1257,7 +1250,7 @@ def register_side_order_display(symbol, side, order_id, display_row=None):
             SIDE_ORDER_TRACKER[str(order_id)] = {
                 "row": row_number, "side": side, "symbol": str(symbol),
             }
-        early_update = SIDE_ORDER_UPDATES.get(str(order_id))
+        early_update = SIDE_ORDER_UPDATES.get(str(order_id)) or {}
         if early_update:
             update_side_order_display(
                 str(order_id), early_update.get("status"),
@@ -1354,8 +1347,10 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             raise ValueError("Select a valid Product Type: MIS, CNC or NRML")
         market_type = str(market_type or "").strip().upper()
         if market_type == "MARKET":
-            broker_order_type = "LIMIT"
-            order_price = _required_positive_number(ltp, "Live LTP")
+            # The dispatcher validates that a fresh LTP exists before queueing.
+            # Submit the broker's actual MARKET order, not a LIMIT at that LTP.
+            broker_order_type = "MARKET"
+            order_price = 0.0
         elif market_type == "LIMIT":
             broker_order_type = "LIMIT"
             order_price = _required_positive_number(limit_price, "Limit Price")
