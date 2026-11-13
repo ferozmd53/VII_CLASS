@@ -1796,48 +1796,101 @@ def start_Trade_Terminal():
     # for every row when a large symbol list is pasted into Excel.
     feed_watchdog_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="FeedWatchdog")
 
-    def subscribe_symbol_in_background(symbol):
-        try:
-            symbol = str(symbol).strip().upper()
-            if len(symbol) < 6 or symbol[3] != ":":
-                raise ValueError(f"Expected symbol format EXCHANGE:TRADINGSYMBOL, received {symbol!r}")
-            exchange = symbol[:3]
-            tradingsymbol = symbol[4:]
-            token = GetToken_UsingSymbol(exchange, tradingsymbol)
-            if token is None or str(token).strip() == "":
-                raise ValueError(f"No instrument token found for {symbol}")
-            token_key = exchange + "|" + str(token)
-            if not BROKER_LOGIN_OK:
-                raise RuntimeError(
-                    "Shoonya REST session is not validated; refusing market-feed subscription."
-                )
-            # A workbook-recovery replay forces a fresh Shoonya subscribe even
-            # when this token is already present in the socket registry.
-            with subscription_lock:
-                force_resubscribe = symbol in force_resubscribe_symbols
-            # Make the token available to the independent Excel writer as soon
-            # as it is resolved; remove it again if the subscribe call fails.
-            Symbol_Token[symbol] = token_key
+    def subscribe_symbol_in_background(symbols):
+        """Resolve pending terminal symbols and send WebSocket subscriptions in batches of ten."""
+        resolved = []
+        for raw_symbol in symbols:
+            symbol = str(raw_symbol).strip().upper()
             try:
-                subscribe_new_token(exchange, token, force=force_resubscribe)
-            except Exception:
-                Symbol_Token.pop(symbol, None)
-                raise
-            with subscription_lock:
-                if force_resubscribe:
-                    force_resubscribe_symbols.discard(symbol)
-                terminal_subscribed.add(symbol)
-            print(f"Symbol = {symbol}, Token={token} subscription sent; waiting for first WebSocket tick")
-            feed_watchdog_executor.submit(
-                _watch_new_symbol_subscription, symbol, exchange, token
-            )
-        except Exception as exc:
-            print(f"Subscribe error {symbol}: {exc}")
-            with subscription_lock:
-                subscription_retry_after[symbol] = _monotonic() + 5.0
-        finally:
-            with subscription_lock:
-                subscription_pending.discard(symbol)
+                if len(symbol) < 6 or symbol[3] != ":":
+                    raise ValueError(
+                        f"Expected symbol format EXCHANGE:TRADINGSYMBOL, received {symbol!r}"
+                    )
+                exchange = symbol[:3]
+                tradingsymbol = symbol[4:]
+                token = GetToken_UsingSymbol(exchange, tradingsymbol)
+                if token is None or str(token).strip() == "":
+                    raise ValueError(f"No instrument token found for {symbol}")
+                if not BROKER_LOGIN_OK:
+                    raise RuntimeError(
+                        "Shoonya REST session is not validated; refusing market-feed subscription."
+                    )
+                token_key = exchange + "|" + str(token)
+                with subscription_lock:
+                    force_resubscribe = symbol in force_resubscribe_symbols
+                Symbol_Token[symbol] = token_key
+                resolved.append((symbol, exchange, token, token_key, force_resubscribe))
+            except Exception as exc:
+                print(f"Subscribe error {symbol}: {exc}")
+                with subscription_lock:
+                    subscription_retry_after[symbol] = _monotonic() + 5.0
+                    subscription_pending.discard(symbol)
+
+        # Keep normal initial/dynamic subscriptions aligned with the reference
+        # terminal: ten instruments per WebSocket send, with a short pause.
+        for offset in range(0, len(resolved), 10):
+            batch = resolved[offset:offset + 10]
+            if not batch:
+                continue
+            token_keys = [item[3] for item in batch]
+            force_batch = any(item[4] for item in batch)
+            try:
+                result = subscribe_symbols_batch(token_keys, force=force_batch)
+                if result["queued"]:
+                    print(
+                        f"Queued {len(batch)} symbol subscriptions; "
+                        "Shoonya WebSocket is not open yet."
+                    )
+                else:
+                    print(
+                        f"Sent symbol subscription batch "
+                        f"{offset // 10 + 1}: {result['sent']} sent, "
+                        f"{result['already_sent']} already sent."
+                    )
+                for symbol, exchange, token, token_key, force_resubscribe in batch:
+                    with subscription_lock:
+                        if force_resubscribe:
+                            force_resubscribe_symbols.discard(symbol)
+                        terminal_subscribed.add(symbol)
+                    print(
+                        f"Symbol = {symbol}, Token={token} subscription queued/sent; "
+                        "waiting for first WebSocket tick"
+                    )
+                    feed_watchdog_executor.submit(
+                        _watch_new_symbol_subscription, symbol, exchange, token
+                    )
+            except Exception as batch_error:
+                print(
+                    f"Subscription batch failed "
+                    f"({token_keys[0]} .. {token_keys[-1]}): {batch_error}. "
+                    "Trying individual recovery sends."
+                )
+                for symbol, exchange, token, token_key, force_resubscribe in batch:
+                    try:
+                        subscribe_new_token(exchange, token, force=force_resubscribe)
+                        with subscription_lock:
+                            if force_resubscribe:
+                                force_resubscribe_symbols.discard(symbol)
+                            terminal_subscribed.add(symbol)
+                        feed_watchdog_executor.submit(
+                            _watch_new_symbol_subscription, symbol, exchange, token
+                        )
+                    except Exception as individual_error:
+                        Symbol_Token.pop(symbol, None)
+                        print(
+                            f"Subscribe recovery failed for {symbol} "
+                            f"({token_key}): {individual_error}"
+                        )
+                        with subscription_lock:
+                            subscription_retry_after[symbol] = _monotonic() + 5.0
+                    finally:
+                        with subscription_lock:
+                            subscription_pending.discard(symbol)
+            else:
+                for symbol, *_ in batch:
+                    with subscription_lock:
+                        subscription_pending.discard(symbol)
+            sleep(0.10)
 
     def write_live_market_data():
         """Write LTP/OHLC/quotes on its own loop, independent of order processing."""
@@ -1969,6 +2022,7 @@ def start_Trade_Terminal():
             main_list = []
             indicator_list = []
 
+            symbols_to_subscribe = []
             idx = 0
             for i in symbols:
                 lst = [None, None, None, None,None, None, None, None, None,None,None]
@@ -1987,7 +2041,7 @@ def start_Trade_Terminal():
                         if needs_subscription:
                             subscription_pending.add(i)
                     if needs_subscription:
-                        subscription_executor.submit(subscribe_symbol_in_background, i)
+                        symbols_to_subscribe.append(i)
                     if i in terminal_subscribed and i in Symbol_Token:
                         try:
                             exchange = i[:3]
@@ -2470,6 +2524,13 @@ def start_Trade_Terminal():
                 indicator_list.append(indicator_row)
 
                 idx += 1
+
+            # Submit all symbols discovered in this Excel scan together.
+            # The worker resolves tokens first, then sends groups of ten.
+            if symbols_to_subscribe:
+                subscription_executor.submit(
+                    subscribe_symbol_in_background, list(symbols_to_subscribe)
+                )
 
             # B:L market quotes are written by LiveMarketDataWriter so a
             # slow order/strategy task cannot pause LTP and OHLC updates.
