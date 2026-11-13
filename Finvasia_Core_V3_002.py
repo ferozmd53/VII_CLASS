@@ -807,7 +807,7 @@ def _resubscribe_registered_tokens():
             break
         batch = tokens[offset:offset + 10]
         try:
-            result = subscribe_symbols_batch(batch)
+            result = subscribe_symbols_batch(batch, source=None)
             sent += result["sent"]
             already_sent += result["already_sent"]
             queued += result["queued"]
