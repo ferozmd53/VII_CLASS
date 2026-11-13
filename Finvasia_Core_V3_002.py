@@ -45,7 +45,8 @@ LIVE_DATA_LOCK = Lock()
 LIVE_TRADE_SHEET_LOCK = Lock()
 SUBSCRIPTION_DIAGNOSTIC_LOCK = Lock()
 SUBSCRIPTION_DIAGNOSTIC_TOKENS = set()
-SUBSCRIPTION_CALLBACK_LOGGED = set()
+SUBSCRIPTION_CALLBACK_LOGGED = set()  # valid positive-LTP callbacks
+SUBSCRIPTION_CALLBACK_SEEN = set()    # any quote/ack callback for a tracked token
 EXCEL_RECONNECT_LOCK = Lock()
 EXCEL_RECONNECT_EVENT_LOCK = Lock()
 EXCEL_RECONNECT_GENERATION = 0
@@ -729,11 +730,20 @@ def event_handler_quote_update(inmessage):
         return
     key = exchange + "|" + token
 
-    # A token callback without a usable LTP is not proof that market data arrived.
+    # Track callback receipt separately from a usable LTP. Shoonya may first
+    # send a token acknowledgement/partial quote without lp; that is still
+    # evidence that the subscription reached this client.
     valid_quote_tick = _has_valid_live_ltp(message)
-    if valid_quote_tick:
-        with SUBSCRIPTION_DIAGNOSTIC_LOCK:
-            if key in SUBSCRIPTION_DIAGNOSTIC_TOKENS and key not in SUBSCRIPTION_CALLBACK_LOGGED:
+    with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+        if key in SUBSCRIPTION_DIAGNOSTIC_TOKENS:
+            if key not in SUBSCRIPTION_CALLBACK_SEEN:
+                SUBSCRIPTION_CALLBACK_SEEN.add(key)
+                print(
+                    f"SHOONYA FIRST CALLBACK for {key}: "
+                    f"type={inmessage.get('t')!r}, lp={message.get('lp')!r}, "
+                    f"fields={','.join(message.keys()) or 'none'}"
+                )
+            if valid_quote_tick and key not in SUBSCRIPTION_CALLBACK_LOGGED:
                 SUBSCRIPTION_CALLBACK_LOGGED.add(key)
                 print(f"SHOONYA FIRST VALID LTP for {key}: lp={message.get('lp')}")
 
@@ -784,24 +794,24 @@ def _resubscribe_registered_tokens():
     already_sent = 0
     queued = 0
     failed = 0
-    for token_key in tokens:
+    # Restore in small batches, following the proven reference terminal's
+    # ten-token batching pattern. The central send lock and per-session set
+    # still prevent duplicate sends during concurrent recovery/workbook scans.
+    for offset in range(0, len(tokens), 10):
         if not feed_opened:
             break
+        batch = tokens[offset:offset + 10]
         try:
-            result = subscribe_symbol(token_key)
-            if result == "sent":
-                sent += 1
-            elif result == "already_sent":
-                already_sent += 1
-            elif result == "queued":
-                queued += 1
-                break
+            result = subscribe_symbols_batch(batch)
+            sent += result["sent"]
+            already_sent += result["already_sent"]
+            queued += result["queued"]
         except Exception as exc:
-            failed += 1
-            print(f"WebSocket resubscribe failed for {token_key}: {exc}")
+            failed += len(batch)
+            print(f"WebSocket resubscribe batch failed ({batch[0]} .. {batch[-1]}): {exc}")
             sleep(0.10)
         else:
-            sleep(0.02)
+            sleep(0.10)
     print(
         f"WebSocket resubscription finished: {sent} sent, "
         f"{already_sent} already sent, {queued} queued, {failed} failed."
@@ -1183,6 +1193,7 @@ def subscribe_symbol(token_key, force=False):
         with SUBSCRIPTION_DIAGNOSTIC_LOCK:
             SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(token_key)
             SUBSCRIPTION_CALLBACK_LOGGED.discard(token_key)
+            SUBSCRIPTION_CALLBACK_SEEN.discard(token_key)
 
         # Shoonya's subscribe API is asynchronous. A successful local return
         # means only that the SDK accepted the send call, not that the server
@@ -1200,6 +1211,52 @@ def subscribe_symbol(token_key, force=False):
         with SOCKET_SUBSCRIPTIONS_LOCK:
             SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
         return "sent"
+
+
+def subscribe_symbols_batch(token_keys, force=False):
+    """Send a small batch of EXCHANGE|TOKEN subscriptions safely."""
+    global api
+    normalized = []
+    for item in token_keys:
+        key = str(item or "").strip().upper()
+        if "|" not in key:
+            raise ValueError(f"Invalid Shoonya token key {key!r}")
+        exchange, token = key.split("|", 1)
+        if not exchange or not token:
+            raise ValueError(f"Invalid Shoonya token key {key!r}")
+        normalized.append(key)
+
+    # Preserve insertion order while removing duplicates.
+    normalized = list(dict.fromkeys(normalized))
+    with SOCKET_SUBSCRIPTIONS_LOCK:
+        SOCKET_SUBSCRIPTIONS.update(normalized)
+    if not feed_opened:
+        return {"sent": 0, "already_sent": 0, "queued": len(normalized)}
+
+    with SOCKET_SUBSCRIBE_SEND_LOCK:
+        if not feed_opened:
+            return {"sent": 0, "already_sent": 0, "queued": len(normalized)}
+        with SOCKET_SUBSCRIPTIONS_LOCK:
+            batch = [key for key in normalized
+                     if force or key not in SOCKET_SESSION_SUBSCRIPTIONS]
+            already = len(normalized) - len(batch)
+        if not batch:
+            return {"sent": 0, "already_sent": already, "queued": 0}
+
+        with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+            for key in batch:
+                SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(key)
+                SUBSCRIPTION_CALLBACK_LOGGED.discard(key)
+                SUBSCRIPTION_CALLBACK_SEEN.discard(key)
+
+        result = api.subscribe(batch)
+        if isinstance(result, dict):
+            status = str(result.get("stat", "")).strip().lower()
+            if status not in ("", "ok"):
+                raise RuntimeError(f"Shoonya rejected subscription batch: {result}")
+        with SOCKET_SUBSCRIPTIONS_LOCK:
+            SOCKET_SESSION_SUBSCRIPTIONS.update(batch)
+        return {"sent": len(batch), "already_sent": already, "queued": 0}
 
 
 def subscribe_new_token(exchange, Token, force=False):
@@ -1289,10 +1346,12 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
             except Exception as probe_error:
                 print(f"SHOONYA REST TOKEN CHECK failed for {symbol} ({token_key}): {probe_error}")
             with SUBSCRIPTION_DIAGNOSTIC_LOCK:
-                callback_seen = token_key in SUBSCRIPTION_CALLBACK_LOGGED
+                callback_seen = token_key in SUBSCRIPTION_CALLBACK_SEEN
+                valid_ltp_seen = token_key in SUBSCRIPTION_CALLBACK_LOGGED
             print(
-                f"WARNING: {symbol} ({token_key}) has no WebSocket tick after "
-                f"four subscription retries; feed callback seen={callback_seen}."
+                f"WARNING: {symbol} ({token_key}) has no valid WebSocket LTP after "
+                f"four subscription retries; callback_seen={callback_seen}, "
+                f"valid_ltp_seen={valid_ltp_seen}."
             )
     except Exception as exc:
         print(f"Subscription watchdog error for {symbol} ({token_key}): {exc}")
