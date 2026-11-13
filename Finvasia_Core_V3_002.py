@@ -45,7 +45,7 @@ from datetime import datetime as dt, timedelta, time, date
 from time import sleep
 import logging
 import socket
-from threading import Thread, Lock
+from threading import Thread, Lock, local
 from concurrent.futures import ThreadPoolExecutor
 
 voice_lock = Lock()
@@ -143,10 +143,33 @@ except Exception:
 # ambiguous xw.Book(path) error when the same file is open more than once.
 excel_workbook = None
 excel_workbook_lock = Lock()
+excel_connection_lost = False
+_excel_com_state = local()
+
+
+def ensure_excel_com_initialized():
+    """Initialize COM once in each Python worker thread on Windows."""
+    if os.name != "nt" or getattr(_excel_com_state, "initialized", False):
+        return
+    try:
+        import pythoncom
+        pythoncom.CoInitialize()
+        _excel_com_state.initialized = True
+    except Exception:
+        # xlwings may still initialize COM itself; the next workbook call
+        # will report a clear connection error if COM is unavailable.
+        pass
 
 
 def get_terminal_workbook():
-    global excel_workbook
+    """Return the open workbook, and reconnect after Excel is reopened.
+
+    Once an Excel disconnect is detected, do not launch a replacement copy
+    automatically. Wait for the user to reopen VII_CLASS.xlsm, then bind to
+    that running workbook instance.
+    """
+    global excel_workbook, excel_connection_lost
+    ensure_excel_com_initialized()
     target_path = os.path.normcase(os.path.abspath(TerminalSheetName))
 
     with excel_workbook_lock:
@@ -157,6 +180,8 @@ def get_terminal_workbook():
                     return excel_workbook
             except Exception:
                 excel_workbook = None
+                excel_connection_lost = True
+                print("Excel COM connection lost. Waiting to reconnect to the reopened workbook...")
 
         matches = []
         try:
@@ -179,7 +204,15 @@ def get_terminal_workbook():
                     "existing instance without opening another copy."
                 )
             excel_workbook = matches[0]
+            excel_connection_lost = False
+            print("Reconnected to the reopened VII_CLASS.xlsm workbook.")
             return excel_workbook
+
+        if excel_connection_lost:
+            raise RuntimeError(
+                "Excel is disconnected. Reopen VII_CLASS.xlsm manually; "
+                "Python will reconnect when the workbook is available."
+            )
 
         excel_workbook = xw.Book(TerminalSheetName)
         return excel_workbook
@@ -1144,6 +1177,9 @@ def start_Trade_Terminal():
             print("Independent live market-data writer started (LTP/OHLC/Bid/Ask/Volume/OI).")
             while True:
                 try:
+                    # Reacquire the workbook/sheet each cycle. A worksheet COM
+                    # proxy from before an Excel crash can never be reused.
+                    market_sheet = get_live_trade_sheet(get_terminal_workbook())
                     market_symbols = market_sheet.range("A4:A1000").value
                     market_rows = []
                     for market_symbol in market_symbols:
@@ -1186,6 +1222,9 @@ def start_Trade_Terminal():
     #run a parallel thread to update the status
     while True:
         try:
+            # Rebind after Excel is closed/reopened; never reuse stale COM sheets.
+            excel_TT = get_terminal_workbook()
+            tt = get_live_trade_sheet(excel_TT)
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
             trading_info = tt.range("BA4:BS1000").value
@@ -1905,6 +1944,10 @@ def start_optionchain():
     
     while True:
         try:
+            # Refresh sheet proxies after an Excel crash/reopen.
+            excel_name = get_terminal_workbook()
+            oci = excel_name.sheets("Option_Chain_Input")
+            Option_Chain_Output = excel_name.sheets("Option_Chain_Output")
             selected_segment = oci.range("E2").value
             Exchange = selected_segment[:3]
             if Exchange not in ['NFO','CDS','MCX', 'BFO']:
@@ -2622,6 +2665,10 @@ def start_optionchain_Pro():
     
     while True:
         try:
+            # Refresh sheet proxies after an Excel crash/reopen.
+            excel_name = get_terminal_workbook()
+            oci_pro = excel_name.sheets("Option_Chain_Pro_Input")
+            Option_Chain_Pro_Output = excel_name.sheets("Option_Chain_Pro_Output")
             selected_segment = oci_pro.range("E2").value
             Exchange = selected_segment[:3]
             if Exchange not in ['NFO','CDS','MCX','BFO']:
@@ -3360,6 +3407,12 @@ def start_Open_Position():
     
     while True:
         try:
+            # Rebind all worksheet proxies to the current Excel process.
+            excel_op = get_terminal_workbook()
+            op_op = excel_op.sheets("OpenPosition")
+            op_tt = get_live_trade_sheet(excel_op)
+            op_hold = excel_op.sheets("Holdings")
+            op_ob = excel_op.sheets("OrderBook")
             get_limits = api.get_limits()
             
             op_tt.range("a2").value = get_limits['cash']
