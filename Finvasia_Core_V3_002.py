@@ -160,6 +160,34 @@ def ensure_excel_com_initialized():
 
 
 
+def normalize_expiry_input(value):
+    """Convert Excel date, datetime, text or serial values to a Python date."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, dt):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        try:
+            return pd.to_datetime(value, unit="D", origin="1899-12-30").date()
+        except Exception:
+            return None
+    if isinstance(value, str):
+        value = value.strip()
+        for date_format in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%b-%Y", "%d %b %Y"):
+            try:
+                return dt.strptime(value, date_format).date()
+            except ValueError:
+                continue
+        try:
+            parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
+            return None if pd.isna(parsed) else parsed.date()
+        except Exception:
+            return None
+    return None
+
+
 def expiry_not_found_message(df_instrument, symbol, expiry_input):
     """Explain a rejected expiry: show the date entered and the valid upcoming expiries."""
     base = "Please enter correct expiry in dd-mm-YYYY (date format)"
@@ -2138,7 +2166,7 @@ def start_optionchain():
             excel_name = get_terminal_workbook()
             oci = excel_name.sheets("Option_Chain_Input")
             Option_Chain_Output = excel_name.sheets("Option_Chain_Output")
-            selected_segment = oci.range("E2").value
+            selected_segment = str(oci.range("E2").value or "").strip()
             Exchange = selected_segment[:3]
             if Exchange not in ['NFO','CDS','MCX', 'BFO']:
                 Exchange = 'NFO'
@@ -2173,8 +2201,8 @@ def start_optionchain():
             pre_selected_segment = selected_segment
             #print(f"post : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
             
-            input_symbol = str(oci.range("E3").value).strip()
-            if input_symbol != None:
+            input_symbol = str(oci.range("E3").value or "").strip()
+            if input_symbol:
 
                 df_instrument_temp = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
                 
@@ -2191,9 +2219,7 @@ def start_optionchain():
                     
                     oci.range("F3").value = None
                     
-                    expiry_input = oci.range("E4").value
-                    
-                    expiry_input = expiry_input.date() 
+                    expiry_input = normalize_expiry_input(oci.range("E4").value) 
 
                     #print(f"Option Chain Details: input_symbol={input_symbol},expiry_input={expiry_input}")
                     if expiry_input != None:
@@ -2859,7 +2885,7 @@ def start_optionchain_Pro():
             excel_name = get_terminal_workbook()
             oci_pro = excel_name.sheets("Option_Chain_Pro_Input")
             Option_Chain_Pro_Output = excel_name.sheets("Option_Chain_Pro_Output")
-            selected_segment = oci_pro.range("E2").value
+            selected_segment = str(oci_pro.range("E2").value or "").strip()
             Exchange = selected_segment[:3]
             if Exchange not in ['NFO','CDS','MCX','BFO']:
                 Exchange = 'NFO'
@@ -2894,7 +2920,7 @@ def start_optionchain_Pro():
             pre_selected_segment = selected_segment
             #print(f"post : pre_selected_segment = {pre_selected_segment}, selected_segment={selected_segment}")
             
-            input_symbol = str(oci_pro.range("E3").value).strip()
+            input_symbol = str(oci_pro.range("E3").value or "").strip()
             if input_symbol != None:
 
                 df_instrument_temp = df_instrument[(df_instrument.Symbol == input_symbol) & (df_instrument['OptionType'].isin(['CE','PE']))]
@@ -2912,9 +2938,7 @@ def start_optionchain_Pro():
                     
                     oci_pro.range("F3").value = None
                     
-                    expiry_input = oci_pro.range("E4").value
-                    
-                    expiry_input = expiry_input.date() 
+                    expiry_input = normalize_expiry_input(oci_pro.range("E4").value) 
 
                     #print(f"Option Chain Details: input_symbol={input_symbol},expiry_input={expiry_input}")
                     if expiry_input != None:
