@@ -51,6 +51,9 @@ from concurrent.futures import ThreadPoolExecutor
 voice_lock = Lock()
 LIVE_DATA_LOCK = Lock()
 EXCEL_RECONNECT_LOCK = Lock()
+EXCEL_RECONNECT_EVENT_LOCK = Lock()
+EXCEL_RECONNECT_GENERATION = 0
+_LAST_EXCEL_RECONNECT_SIGNAL = 0.0
 _LAST_EXCEL_RELAUNCH = 0.0
 EXCEL_RELAUNCH_COOLDOWN_SEC = 30
 SYSTEM_INTERNET_OK = None
@@ -248,6 +251,18 @@ def is_excel_connection_lost():
     return bool(getattr(_excel_com_state, "connection_lost", False))
 
 
+def _notify_excel_workbook_reconnected():
+    """Signal one workbook-recovery event, coalescing worker-thread rebinds."""
+    global EXCEL_RECONNECT_GENERATION, _LAST_EXCEL_RECONNECT_SIGNAL
+    now = _monotonic()
+    with EXCEL_RECONNECT_EVENT_LOCK:
+        # Several workers can independently rebind after one Excel restart.
+        # Coalesce those notices so the terminal performs one replay, not many.
+        if now - _LAST_EXCEL_RECONNECT_SIGNAL >= 10.0:
+            EXCEL_RECONNECT_GENERATION += 1
+            _LAST_EXCEL_RECONNECT_SIGNAL = now
+
+
 def get_terminal_workbook():
     """Get a thread-local workbook proxy attached to the already-open workbook.
 
@@ -307,6 +322,7 @@ def get_terminal_workbook():
         _excel_com_state.disconnect_reported = False
         if was_disconnected:
             print("Excel workbook connection restored for this worker.")
+            _notify_excel_workbook_reconnected()
         return workbook
 
     # Recovery: Excel may have been restarted as a new COM server after a
@@ -339,6 +355,7 @@ def get_terminal_workbook():
                                 _excel_com_state.disconnect_reported = False
                                 _excel_com_state.reconnect_error_reported = False
                                 print("Excel workbook connection restored for this worker.")
+                                _notify_excel_workbook_reconnected()
                                 return book
                             except Exception as book_error:
                                 if is_excel_busy_error(book_error):
@@ -360,6 +377,7 @@ def get_terminal_workbook():
                         _excel_com_state.disconnect_reported = False
                         _excel_com_state.reconnect_error_reported = False
                         print("Excel workbook connection restored for this worker.")
+                        _notify_excel_workbook_reconnected()
                         return workbook
                     except Exception as reconnect_error:
                         if is_excel_busy_error(reconnect_error):
@@ -390,6 +408,7 @@ def get_terminal_workbook():
                         _excel_com_state.disconnect_reported = False
                         _excel_com_state.reconnect_error_reported = False
                         print("Excel workbook connection restored for this worker.")
+                        _notify_excel_workbook_reconnected()
                         return workbook
                     except Exception as relaunch_error:
                         if is_excel_busy_error(relaunch_error):
@@ -1546,7 +1565,9 @@ def start_Trade_Terminal():
     terminal_subscribed = set()
     subscription_pending = set()
     subscription_retry_after = {}
+    force_resubscribe_symbols = set()
     subscription_lock = Lock()
+    last_excel_reconnect_generation = EXCEL_RECONNECT_GENERATION
     from concurrent.futures import ThreadPoolExecutor
     subscription_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="SymbolSubscribe")
 
@@ -1561,15 +1582,21 @@ def start_Trade_Terminal():
             if token is None or str(token).strip() == "":
                 raise ValueError(f"No instrument token found for {symbol}")
             token_key = exchange + "|" + str(token)
+            # A workbook-recovery replay forces a fresh Shoonya subscribe even
+            # when this token is already present in the socket registry.
+            with subscription_lock:
+                force_resubscribe = symbol in force_resubscribe_symbols
             # Make the token available to the independent Excel writer as soon
             # as it is resolved; remove it again if the subscribe call fails.
             Symbol_Token[symbol] = token_key
             try:
-                subscribe_new_token(exchange, token)
+                subscribe_new_token(exchange, token, force=force_resubscribe)
             except Exception:
                 Symbol_Token.pop(symbol, None)
                 raise
             with subscription_lock:
+                if force_resubscribe:
+                    force_resubscribe_symbols.discard(symbol)
                 terminal_subscribed.add(symbol)
             print(f"Symbol = {symbol}, Token={token} subscription sent; waiting for first WebSocket tick")
             Thread(
@@ -1651,6 +1678,20 @@ def start_Trade_Terminal():
             # Rebind after Excel is closed/reopened; never reuse stale COM sheets.
             excel_TT = get_terminal_workbook()
             tt = get_live_trade_sheet(excel_TT)
+            current_reconnect_generation = EXCEL_RECONNECT_GENERATION
+            if current_reconnect_generation != last_excel_reconnect_generation:
+                active_symbols = [
+                    str(value).strip().upper() for value in tt.range("A4:A1000").value
+                    if value is not None and str(value).strip()
+                ]
+                with subscription_lock:
+                    terminal_subscribed.clear()
+                    force_resubscribe_symbols.update(active_symbols)
+                last_excel_reconnect_generation = current_reconnect_generation
+                print(
+                    "Excel recovery detected: scheduling fresh WebSocket subscriptions "
+                    f"for {len(active_symbols)} active Trade_Terminal symbols."
+                )
             Product_type = tt.range(f"P2").value
             symbols = tt.range(f"a{4}:a{1000}").value
             trading_info = tt.range("BA4:BS1000").value
@@ -1684,7 +1725,7 @@ def start_Trade_Terminal():
                     with subscription_lock:
                         retry_ready = _monotonic() >= subscription_retry_after.get(i, 0.0)
                         needs_subscription = (
-                            i not in terminal_subscribed
+                            (i not in terminal_subscribed or i in force_resubscribe_symbols)
                             and i not in subscription_pending
                             and retry_ready
                         )
