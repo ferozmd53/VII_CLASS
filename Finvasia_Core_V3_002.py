@@ -624,6 +624,9 @@ live_data = {}
 # Shoonya WebSocket can restore the complete feed, including option strikes.
 SOCKET_SUBSCRIPTIONS = set()
 SOCKET_SUBSCRIPTIONS_LOCK = Lock()
+# Serialize subscribe commands: reconnect restoration and newly added symbols
+# can otherwise write to the Shoonya WebSocket from different threads at once.
+SOCKET_SUBSCRIBE_SEND_LOCK = Lock()
 indicator_engine = IndicatorEngine()
 
 Telegram_Message = ["Welcome to Python Trader excel based trade terminal","Have a Good Day"]
@@ -741,7 +744,10 @@ def _resubscribe_registered_tokens():
         if not feed_opened:
             break
         try:
-            api.subscribe([token_key])
+            with SOCKET_SUBSCRIBE_SEND_LOCK:
+                if not feed_opened:
+                    break
+                api.subscribe([token_key])
             restored += 1
             sleep(0.02)
         except Exception as exc:
@@ -1019,21 +1025,17 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
     return Token
 
 def subscribe_new_token(exchange, Token):
-    """Subscribe once and retain the token for automatic WebSocket recovery."""
+    """Subscribe a new quote token and register it for reconnect recovery."""
     global api
     token_key = f"{exchange}|{Token}"
-    with SOCKET_SUBSCRIPTIONS_LOCK:
-        already_registered = token_key in SOCKET_SUBSCRIPTIONS
-        SOCKET_SUBSCRIPTIONS.add(token_key)
-    try:
-        # A repeated request is still sent when the socket is newly open;
-        # the broker accepts the token subscription idempotently.
+    if not feed_opened:
+        raise RuntimeError("Shoonya WebSocket is not open; subscription will be retried.")
+    with SOCKET_SUBSCRIBE_SEND_LOCK:
+        if not feed_opened:
+            raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
         api.subscribe([token_key])
-    except Exception:
-        if not already_registered:
-            with SOCKET_SUBSCRIPTIONS_LOCK:
-                SOCKET_SUBSCRIPTIONS.discard(token_key)
-        raise
+    with SOCKET_SUBSCRIPTIONS_LOCK:
+        SOCKET_SUBSCRIPTIONS.add(token_key)
 
 LimitOrderBook = {}
 
@@ -1468,8 +1470,11 @@ def start_Trade_Terminal():
 
     def subscribe_symbol_in_background(symbol):
         try:
-            exchange = str(symbol)[:3]
-            tradingsymbol = str(symbol)[4:]
+            symbol = str(symbol).strip().upper()
+            if len(symbol) < 6 or symbol[3] != ":":
+                raise ValueError(f"Expected symbol format EXCHANGE:TRADINGSYMBOL, received {symbol!r}")
+            exchange = symbol[:3]
+            tradingsymbol = symbol[4:]
             token = GetToken_UsingSymbol(exchange, tradingsymbol)
             if token is None or str(token).strip() == "":
                 raise ValueError(f"No instrument token found for {symbol}")
@@ -1507,7 +1512,7 @@ def start_Trade_Terminal():
                     for market_symbol in market_symbols:
                         values = [None] * 11
                         if market_symbol:
-                            token_key = Symbol_Token.get(str(market_symbol).strip())
+                            token_key = Symbol_Token.get(str(market_symbol).strip().upper())
                             if token_key:
                                 with LIVE_DATA_LOCK:
                                     quote_snapshot = dict(live_data.get(token_key, {}))
@@ -1576,6 +1581,9 @@ def start_Trade_Terminal():
             for i in symbols:
                 lst = [None, None, None, None,None, None, None, None, None,None,None]
                 indicator_row = [None, None, None, None, None, None, "", ""]
+                # Excel cells may contain trailing spaces or inconsistent case.
+                # Use one canonical key for lookup, subscription and quote writing.
+                i = str(i).strip().upper() if i is not None else ""
                 if i:
                     with subscription_lock:
                         needs_subscription = i not in terminal_subscribed and i not in subscription_pending
