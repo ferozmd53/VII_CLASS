@@ -627,8 +627,6 @@ SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 # Serialize subscribe commands: reconnect restoration and newly added symbols
 # can otherwise write to the Shoonya WebSocket from different threads at once.
 SOCKET_SUBSCRIBE_SEND_LOCK = Lock()
-SOCKET_SUBSCRIPTION_ACKS = {}
-SOCKET_SUBSCRIPTION_ACKS_LOCK = Lock()
 indicator_engine = IndicatorEngine()
 
 Telegram_Message = ["Welcome to Python Trader excel based trade terminal","Have a Good Day"]
@@ -700,14 +698,6 @@ def event_handler_quote_update(inmessage):
     if not exchange or not token:
         return
     key = exchange + "|" + token
-
-    # Shoonya's t='tk' message confirms the broker accepted this instrument.
-    if str(inmessage.get("t") or "").lower() == "tk":
-        with SOCKET_SUBSCRIPTION_ACKS_LOCK:
-            ack_event = SOCKET_SUBSCRIPTION_ACKS.get(key)
-        if ack_event is not None:
-            ack_event.set()
-            print(f"Shoonya feed ACK received: {key} ({inmessage.get('ts', '')})")
 
     # Keep quote ingestion short and independent from Excel/order workers.
     # Replace the snapshot atomically so readers never see a half-updated OHLC tick.
@@ -1038,31 +1028,32 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
         pass
     return Token
 
-def subscribe_new_token(exchange, Token, ack_timeout=5.0):
-    """Subscribe a token and wait for Shoonya's initial market-feed acknowledgement."""
+def subscribe_new_token(exchange, Token):
+    """Send a market-feed subscription immediately; never wait for a tick/ACK."""
     global api
-    token_key = f"{exchange}|{Token}"
+    token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
     if not feed_opened:
         raise RuntimeError("Shoonya WebSocket is not open; subscription will be retried.")
-    ack_event = Event()
-    with SOCKET_SUBSCRIPTION_ACKS_LOCK:
-        SOCKET_SUBSCRIPTION_ACKS[token_key] = ack_event
+
+    # Register before sending so a reconnect can restore this token even if
+    # the socket drops immediately after the subscribe command.
+    with SOCKET_SUBSCRIPTIONS_LOCK:
+        already_registered = token_key in SOCKET_SUBSCRIPTIONS
+        SOCKET_SUBSCRIPTIONS.add(token_key)
+
     try:
         with SOCKET_SUBSCRIBE_SEND_LOCK:
             if not feed_opened:
                 raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
-            api.subscribe(token_key)
-        if not ack_event.wait(ack_timeout):
-            raise TimeoutError(
-                f"No Shoonya market-feed ACK received for {token_key} "
-                f"within {ack_timeout:.0f} seconds"
-            )
-        with SOCKET_SUBSCRIPTIONS_LOCK:
-            SOCKET_SUBSCRIPTIONS.add(token_key)
-    finally:
-        with SOCKET_SUBSCRIPTION_ACKS_LOCK:
-            if SOCKET_SUBSCRIPTION_ACKS.get(token_key) is ack_event:
-                SOCKET_SUBSCRIPTION_ACKS.pop(token_key, None)
+            if not already_registered:
+                api.subscribe([token_key])
+    except Exception:
+        # Do not retain a failed first-time subscription; the terminal worker
+        # will retry it. Existing registrations remain available for reconnect.
+        if not already_registered:
+            with SOCKET_SUBSCRIPTIONS_LOCK:
+                SOCKET_SUBSCRIPTIONS.discard(token_key)
+        raise
 
 LimitOrderBook = {}
 
