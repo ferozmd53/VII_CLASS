@@ -1279,7 +1279,12 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
         if state is None:
             existing_id = sheet.range(f"{id_col}{row_number}").value
             existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
-            if existing_id not in (None, "") or existing_status:
+            # A WAITING message is only an incomplete user input, not a
+            # previously submitted order. Allow the command to queue once the
+            # user finishes the missing fields.
+            if existing_id not in (None, "") or (
+                existing_status and not existing_status.upper().startswith("WAITING:")
+            ):
                 SIDE_TRIGGER_STATE[key] = {"armed": True, "recovered": True}
                 return
             state = {"armed": False}
