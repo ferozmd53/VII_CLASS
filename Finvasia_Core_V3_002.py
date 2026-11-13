@@ -1236,6 +1236,33 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
                         f"lp={quote_probe.get('lp')!r}, "
                         f"message={quote_probe.get('emsg')!r}"
                     )
+                    if str(quote_probe.get("stat", "")).strip().lower() == "ok":
+                        expected_tsym = str(symbol).split(":", 1)[-1].strip().upper()
+                        returned_tsym = str(quote_probe.get("tsym") or "").strip().upper()
+                        returned_token = str(quote_probe.get("token") or "").strip()
+                        if not returned_tsym:
+                            print(
+                                f"REST TOKEN IDENTITY UNVERIFIED for {symbol}: "
+                                "Shoonya returned stat=Ok without tsym."
+                            )
+                        elif returned_tsym != expected_tsym or (
+                            returned_token and returned_token != str(token).strip()
+                        ):
+                            print(
+                                f"REST TOKEN MISMATCH for {symbol} ({token_key}): "
+                                f"broker returned tsym={returned_tsym!r}, "
+                                f"token={returned_token!r}."
+                            )
+                        else:
+                            print(
+                                f"REST TOKEN VERIFIED for {symbol} ({token_key}): "
+                                f"tsym={returned_tsym}; investigate WebSocket delivery."
+                            )
+                    else:
+                        print(
+                            f"REST TOKEN NOT VERIFIED for {symbol} ({token_key}); "
+                            "the REST response was not successful."
+                        )
                 else:
                     print(f"SHOONYA REST TOKEN CHECK for {symbol} ({token_key}): {quote_probe!r}")
             except Exception as probe_error:
