@@ -669,6 +669,9 @@ live_data = {}
 # Keep every token subscribed during this API session so a re-opened
 # Shoonya WebSocket can restore the complete feed, including option strikes.
 SOCKET_SUBSCRIPTIONS = set()
+# Lifetime registry is for reconnect recovery. This second registry tracks
+# which tokens have actually been sent on the CURRENT WebSocket session.
+SOCKET_SESSION_SUBSCRIPTIONS = set()
 SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 # Serialize subscribe commands: reconnect restoration and newly added symbols
 # can otherwise write to the Shoonya WebSocket from different threads at once.
@@ -796,6 +799,7 @@ def _resubscribe_registered_tokens():
         return
 
     restored = 0
+    already_sent = 0
     failed = 0
     for token_key in tokens:
         if not feed_opened:
@@ -804,7 +808,14 @@ def _resubscribe_registered_tokens():
             with SOCKET_SUBSCRIBE_SEND_LOCK:
                 if not feed_opened:
                     break
+                with SOCKET_SUBSCRIPTIONS_LOCK:
+                    sent_this_session = token_key in SOCKET_SESSION_SUBSCRIPTIONS
+                if sent_this_session:
+                    already_sent += 1
+                    continue
                 api.subscribe([token_key])
+                with SOCKET_SUBSCRIPTIONS_LOCK:
+                    SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
             restored += 1
             sleep(0.02)
         except Exception as exc:
@@ -813,7 +824,7 @@ def _resubscribe_registered_tokens():
             sleep(0.10)
     print(
         f"WebSocket resubscription finished: {restored}/{len(tokens)} "
-        f"tokens restored; {failed} failed."
+        f"tokens restored; {already_sent} already sent this session; {failed} failed."
     )
 
 
@@ -823,6 +834,11 @@ def open_callback():
     feed_opened = True
     if was_open:
         return
+
+    # A new WebSocket connection has no active quote subscriptions. Keep the
+    # lifetime token list, but reset the per-connection send registry.
+    with SOCKET_SUBSCRIPTIONS_LOCK:
+        SOCKET_SESSION_SUBSCRIPTIONS.clear()
 
     # Old quotes must not be used to place orders while the new socket is
     # still restoring subscriptions. Fresh quote callbacks repopulate them.
@@ -1151,14 +1167,14 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
     return token
 
 def subscribe_new_token(exchange, Token, force=False):
-    """Send a market-feed subscription immediately; optionally resend it."""
+    """Send a token once per live socket session; force=True explicitly retries."""
     global api
     token_key = f"{str(exchange).strip().upper()}|{str(Token).strip()}"
     if not feed_opened:
         raise RuntimeError("Shoonya WebSocket is not open; subscription will be retried.")
 
-    # Register before sending so a reconnect can restore this token even if
-    # the socket drops immediately after the subscribe command.
+    # Keep a lifetime registry for reconnect recovery, but never use that
+    # registry to decide whether this token was sent on the current socket.
     with SOCKET_SUBSCRIPTIONS_LOCK:
         already_registered = token_key in SOCKET_SUBSCRIPTIONS
         SOCKET_SUBSCRIPTIONS.add(token_key)
@@ -1167,14 +1183,18 @@ def subscribe_new_token(exchange, Token, force=False):
         with SOCKET_SUBSCRIBE_SEND_LOCK:
             if not feed_opened:
                 raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
-            if force or not already_registered:
+
+            # Recheck while holding the send lock: the reconnect restoration
+            # worker and the new-symbol worker may reach this token together.
+            with SOCKET_SUBSCRIPTIONS_LOCK:
+                sent_this_session = token_key in SOCKET_SESSION_SUBSCRIPTIONS
+
+            if force or not sent_this_session:
                 with SUBSCRIPTION_DIAGNOSTIC_LOCK:
                     SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(token_key)
                     SUBSCRIPTION_CALLBACK_LOGGED.discard(token_key)
+
                 subscribe_result = api.subscribe([token_key])
-                # Some Shoonya SDK builds return None on a successful send.
-                # Log explicit broker-side rejection payloads, but do not treat
-                # a None return as proof that the subscription was rejected.
                 if isinstance(subscribe_result, dict):
                     if str(subscribe_result.get("stat", "")).strip().lower() not in ("", "ok"):
                         raise RuntimeError(
@@ -1182,9 +1202,16 @@ def subscribe_new_token(exchange, Token, force=False):
                         )
                     if subscribe_result:
                         print(f"Shoonya subscribe response for {token_key}: {subscribe_result}")
+
+                # Record only after the SDK call succeeds. A later watchdog
+                # retry can still force a resend if the server sends no tick.
+                with SOCKET_SUBSCRIPTIONS_LOCK:
+                    SOCKET_SESSION_SUBSCRIPTIONS.add(token_key)
+            else:
+                print(
+                    f"Subscription already sent in this WebSocket session: {token_key}"
+                )
     except Exception:
-        # Do not retain a failed first-time subscription; the terminal worker
-        # will retry it. Existing registrations remain available for reconnect.
         if not already_registered:
             with SOCKET_SUBSCRIPTIONS_LOCK:
                 SOCKET_SUBSCRIPTIONS.discard(token_key)
