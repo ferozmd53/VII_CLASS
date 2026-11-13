@@ -165,8 +165,14 @@ def normalize_expiry_input(value):
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, dt):
-        return value.date()
+        parsed_date = value.date()
+        # xlwings can return a blank date-formatted cell as the Excel epoch.
+        if parsed_date <= date(1899, 12, 30):
+            return None
+        return parsed_date
     if isinstance(value, date):
+        if value <= date(1899, 12, 30):
+            return None
         return value
     if isinstance(value, (int, float, np.integer, np.floating)):
         try:
@@ -191,6 +197,23 @@ def normalize_expiry_input(value):
         except Exception:
             return None
     return None
+
+
+def resolve_option_expiry(df_instrument, symbol, requested_expiry):
+    """Keep a valid requested expiry, otherwise choose the nearest upcoming expiry."""
+    rows = df_instrument[
+        (df_instrument.Symbol == symbol)
+        & (df_instrument["OptionType"].isin(["CE", "PE"]))
+    ]
+    available = set()
+    for value in rows["Expiry"].dropna().unique():
+        value = value.date() if hasattr(value, "date") else value
+        if isinstance(value, date) and value >= date.today():
+            available.add(value)
+
+    if requested_expiry in available:
+        return requested_expiry
+    return min(available) if available else None
 
 
 def expiry_not_found_message(df_instrument, symbol, expiry_input):
@@ -2360,7 +2383,15 @@ def start_optionchain():
                     
                     oci.range("F3").value = None
                     
-                    expiry_input = normalize_expiry_input(oci.range("E4").value) 
+                    expiry_input = normalize_expiry_input(oci.range("E4").value)
+                    valid_expiry = resolve_option_expiry(df_instrument, input_symbol, expiry_input)
+                    if valid_expiry is not None and valid_expiry != expiry_input:
+                        expiry_input = valid_expiry
+                        oci.range("E4").value = expiry_input
+                        print(
+                            f"Option Chain: invalid/blank expiry corrected for "
+                            f"{input_symbol}; using {expiry_input.strftime('%d-%m-%Y')}"
+                        )
 
                     #print(f"Option Chain Details: input_symbol={input_symbol},expiry_input={expiry_input}")
                     if expiry_input != None:
@@ -3079,7 +3110,15 @@ def start_optionchain_Pro():
                     
                     oci_pro.range("F3").value = None
                     
-                    expiry_input = normalize_expiry_input(oci_pro.range("E4").value) 
+                    expiry_input = normalize_expiry_input(oci_pro.range("E4").value)
+                    valid_expiry = resolve_option_expiry(df_instrument, input_symbol, expiry_input)
+                    if valid_expiry is not None and valid_expiry != expiry_input:
+                        expiry_input = valid_expiry
+                        oci_pro.range("E4").value = expiry_input
+                        print(
+                            f"PRO Option Chain: invalid/blank expiry corrected for "
+                            f"{input_symbol}; using {expiry_input.strftime('%d-%m-%Y')}"
+                        )
 
                     #print(f"Option Chain Details: input_symbol={input_symbol},expiry_input={expiry_input}")
                     if expiry_input != None:
