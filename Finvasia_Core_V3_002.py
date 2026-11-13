@@ -50,6 +50,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 voice_lock = Lock()
 LIVE_DATA_LOCK = Lock()
+LIVE_TRADE_SHEET_LOCK = Lock()
+SUBSCRIPTION_DIAGNOSTIC_LOCK = Lock()
+SUBSCRIPTION_DIAGNOSTIC_TOKENS = set()
+SUBSCRIPTION_CALLBACK_LOGGED = set()
 EXCEL_RECONNECT_LOCK = Lock()
 EXCEL_RECONNECT_EVENT_LOCK = Lock()
 EXCEL_RECONNECT_GENERATION = 0
@@ -741,6 +745,13 @@ def event_handler_quote_update(inmessage):
         return
     key = exchange + "|" + token
 
+    # The subscribe() call is asynchronous. Record the first server callback
+    # for each newly requested token so "sent" is not confused with "accepted".
+    with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+        if key in SUBSCRIPTION_DIAGNOSTIC_TOKENS and key not in SUBSCRIPTION_CALLBACK_LOGGED:
+            SUBSCRIPTION_CALLBACK_LOGGED.add(key)
+            print(f"SHOONYA FEED CALLBACK for {key}: {inmessage}")
+
     # Keep quote ingestion short and independent from Excel/order workers.
     # Replace the snapshot atomically so readers never see a half-updated OHLC tick.
     with LIVE_DATA_LOCK:
@@ -1102,6 +1113,9 @@ def subscribe_new_token(exchange, Token, force=False):
             if not feed_opened:
                 raise RuntimeError("Shoonya WebSocket closed before subscription was sent.")
             if force or not already_registered:
+                with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+                    SUBSCRIPTION_DIAGNOSTIC_TOKENS.add(token_key)
+                    SUBSCRIPTION_CALLBACK_LOGGED.discard(token_key)
                 subscribe_result = api.subscribe([token_key])
                 # Some Shoonya SDK builds return None on a successful send.
                 # Log explicit broker-side rejection payloads, but do not treat
@@ -1154,9 +1168,28 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
         with LIVE_DATA_LOCK:
             received = bool(live_data.get(token_key))
         if not received:
+            # Read-only REST probe: confirms whether this exact exchange/token
+            # resolves to the requested symbol. Never writes REST data to live_data.
+            try:
+                quote_probe = api.get_quotes(exchange=exchange, token=str(token))
+                if isinstance(quote_probe, dict):
+                    print(
+                        f"SHOONYA REST TOKEN CHECK for {symbol} ({token_key}): "
+                        f"stat={quote_probe.get('stat')!r}, "
+                        f"tsym={quote_probe.get('tsym')!r}, "
+                        f"token={quote_probe.get('token')!r}, "
+                        f"lp={quote_probe.get('lp')!r}, "
+                        f"message={quote_probe.get('emsg')!r}"
+                    )
+                else:
+                    print(f"SHOONYA REST TOKEN CHECK for {symbol} ({token_key}): {quote_probe!r}")
+            except Exception as probe_error:
+                print(f"SHOONYA REST TOKEN CHECK failed for {symbol} ({token_key}): {probe_error}")
+            with SUBSCRIPTION_DIAGNOSTIC_LOCK:
+                callback_seen = token_key in SUBSCRIPTION_CALLBACK_LOGGED
             print(
                 f"WARNING: {symbol} ({token_key}) has no WebSocket tick after "
-                "four subscription retries. Check the symbol/token or market status."
+                f"four subscription retries; feed callback seen={callback_seen}."
             )
     except Exception as exc:
         print(f"Subscription watchdog error for {symbol} ({token_key}): {exc}")
@@ -1442,21 +1475,24 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
 
 
 def get_live_trade_sheet(workbook):
-    """Return LIVE_TRADE and permanently rename the old worksheet on first run."""
-    try:
-        return workbook.sheets("LIVE_TRADE")
-    except Exception:
-        try:
-            old_sheet = workbook.sheets("Trade_Terminal")
+    """Return the terminal sheet without mistaking transient COM errors for a missing sheet."""
+    with LIVE_TRADE_SHEET_LOCK:
+        # Read the collection once. COM/OLE failures must propagate to the
+        # caller's recovery loop; they must never trigger a worksheet rename.
+        sheet_names = [sheet.name for sheet in workbook.sheets]
+        if "LIVE_TRADE" in sheet_names:
+            return workbook.sheets["LIVE_TRADE"]
+        if "Trade_Terminal" in sheet_names:
+            old_sheet = workbook.sheets["Trade_Terminal"]
             old_sheet.name = "LIVE_TRADE"
             try:
                 workbook.save()
             except Exception as save_error:
                 print(f"LIVE_TRADE renamed in Excel but workbook save failed: {save_error}")
             return old_sheet
-        except Exception:
-            # Another worker may have completed the rename at the same time.
-            return workbook.sheets("LIVE_TRADE")
+        raise KeyError(
+            "Neither LIVE_TRADE nor Trade_Terminal worksheet exists in VII_CLASS.xlsm."
+        )
 
 
 def start_Trade_Terminal():
