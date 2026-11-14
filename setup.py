@@ -5,7 +5,7 @@ setup(
     version="1.0.2",
     description="Shoonya OAuth-enabled Finvasia Excel terminal with indicators",
     py_modules=[
-        "Finvasia_Core_V3_002",
+        "VII_CLASS",
         "Shoonya_OAuth",
         "Shoonya_Indicators",
         "Weekly",
