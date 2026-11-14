@@ -151,6 +151,9 @@ class IntradayIndicatorEngine:
         "5m Candle Time", "5m Open", "5m High", "5m Low", "5m Close", "5m Volume",
         "5m upperpink", "5m mirrorUpperBand",
         "Data Status",
+        "1m upperpink (2nd-last)", "1m mirrorUpperBand (2nd-last)",
+        "5m upperpink (2nd-last)", "5m mirrorUpperBand (2nd-last)",
+        "LTP",
     ]
     INPUTS = [
         ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "low",
@@ -381,7 +384,7 @@ class IntradayIndicatorEngine:
 
     def _calculate(self, frame, interval, live=True, settings=None):
         if frame is None or len(frame) < 2:
-            return None, None
+            return None, None, None, None
 
         settings = settings or {}
         first_bar = settings.get("first_bar_time", self.FIRST_BAR_TIME)
@@ -435,24 +438,29 @@ class IntradayIndicatorEngine:
             lower_values.append(lower)
 
         current = len(frame) - 1
+        previous = current - 1
         mirror_value = mirror_upper.iloc[current]
         mirror_value = round(float(mirror_value), 4) if pd.notna(mirror_value) else None
+        previous_mirror = mirror_upper.iloc[previous]
+        previous_mirror = round(float(previous_mirror), 4) if pd.notna(previous_mirror) else None
         # Pine: plot(st, "upperpink", fuchsia) -> the plotted value is the STEP line `st`,
         # not the upper band (st[1] + ATR). Old code returned the band, so it never matched.
         upperpink = step_values[current]
         upperpink = round(float(upperpink), 4) if pd.notna(upperpink) and upperpink > 0 else None
-        return upperpink, mirror_value
+        previous_upperpink = step_values[previous]
+        previous_upperpink = round(float(previous_upperpink), 4) if pd.notna(previous_upperpink) and previous_upperpink > 0 else None
+        return upperpink, mirror_value, previous_upperpink, previous_mirror
 
     def _result_for_interval(self, history, interval, settings, ltp=None):
         """Use the newest timestamped candle returned by Shoonya; never invent one."""
         if history is None or history.empty:
-            return None, None, None, None
+            return None, None, None, None, None, None
 
         frame = history.copy()
         frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
         frame = frame.dropna(subset=["datetime"]).sort_values("datetime")
         if frame.empty:
-            return None, None, None, None
+            return None, None, None, None, None, None
 
         # Shoonya history is the source of truth for both candle time and OHLCV.
         # Do not synthesize a candle from local PC time or the latest WebSocket LTP.
@@ -468,7 +476,7 @@ class IntradayIndicatorEngine:
             if timedelta(0) <= gap <= timedelta(minutes=interval):
                 frame = self._merge_live_candle(frame, ltp, datetime.now(), interval)
         candle = frame.iloc[-1]
-        upperpink, mirror_upper = self._calculate(
+        upperpink, mirror_upper, previous_upperpink, previous_mirror = self._calculate(
             frame, interval, live=True, settings=settings
         )
 
@@ -481,7 +489,7 @@ class IntradayIndicatorEngine:
             self._number(candle.get("close")),
             volume,
         ]
-        return candle_time, ohlcv, upperpink, mirror_upper
+        return candle_time, ohlcv, upperpink, mirror_upper, previous_upperpink, previous_mirror
 
     def update_symbol(self, api, symbol, token_key, quote, settings=None):
         exchange, token = token_key.split("|", 1)
@@ -573,12 +581,12 @@ class IntradayIndicatorEngine:
 
                 # No manual candle-time selector: timestamps always come from Shoonya.
                 sheet.range("M1:N1").clear_contents()
-                sheet.range("A3:R3").value = [self.HEADERS]
-                # Remove obsolete columns beyond the new 18-column output.
-                sheet.range("S3:Z1000").clear_contents()
+                sheet.range("A3:W3").value = [self.HEADERS]
+                # Clear only unused columns beyond the 23-column INTRADAY output.
+                sheet.range("X3:Z1000").clear_contents()
                 sheet.range("A1:N2").api.Font.Bold = True
-                sheet.range("A3:R3").api.Font.Bold = True
-                sheet.range("A1:N3").api.WrapText = True
+                sheet.range("A3:W3").api.Font.Bold = True
+                sheet.range("A1:W3").api.WrapText = True
                 sheet.range("B4:B1000").api.NumberFormat = "dd-mm-yyyy hh:mm"
                 sheet.range("J4:J1000").api.NumberFormat = "dd-mm-yyyy hh:mm"
                 self.sheet_ready = True
@@ -635,21 +643,26 @@ class IntradayIndicatorEngine:
                     api, symbol, token_key, quote, settings=settings
                 )
                 def timeframe_values(result):
-                    if not result or len(result) != 4 or result[1] is None:
+                    if not result or len(result) != 6 or result[1] is None:
                         return [None] * 8
-                    candle_time, ohlcv, upperpink, mirror_upper = result
+                    candle_time, ohlcv, upperpink, mirror_upper, _, _ = result
                     return [candle_time] + list(ohlcv) + [upperpink, mirror_upper]
 
+                one_previous = one_minute[4:6] if one_minute and len(one_minute) == 6 else [None, None]
+                five_previous = five_minute[4:6] if five_minute and len(five_minute) == 6 else [None, None]
                 output.append(
                     [symbol]
                     + timeframe_values(one_minute)
                     + timeframe_values(five_minute)
                     + [status]
+                    + list(one_previous)
+                    + list(five_previous)
+                    + [ltp]
                 )
 
-            sheet.range(f"A4:R{last_row}").value = output
+            sheet.range(f"A4:W{last_row}").value = output
             if self.last_written_row > last_row:
-                sheet.range(f"A{last_row + 1}:R{self.last_written_row}").clear_contents()
+                sheet.range(f"A{last_row + 1}:W{self.last_written_row}").clear_contents()
             self.last_written_row = last_row
         except Exception as exc:
             print(f"INTRADAY sheet refresh failed: {exc}")
