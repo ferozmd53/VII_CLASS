@@ -327,7 +327,69 @@ def login_with_excel(workbook, auth_code_provider=None):
             str(login_sheet.range("B13").value or session_sheet.range("B4").value or uid).strip()
         )
         if _valid_session(candidate):
-            print(f"Reusing valid Shoonya OAuth session ({age / 3600:.1f} hours old).")
+            # Restore the visible LOGIN cells from the valid saved session.
+            # OAuth authorization codes are one-time values and must stay blank
+            # after a successful token exchange.
+            created_value = login_sheet.range("B12").value
+            if created_value in (None, ""):
+                saved_created = session_sheet.range("B3").value
+                try:
+                    if isinstance(saved_created, datetime):
+                        created_epoch = int(saved_created.replace(tzinfo=None).timestamp())
+                    else:
+                        created_epoch = int(
+                            datetime.fromisoformat(str(saved_created).strip())
+                            .replace(tzinfo=None).timestamp()
+                        )
+                except Exception:
+                    created_epoch = int(time.time() - age)
+            else:
+                try:
+                    created_epoch = int(float(created_value))
+                except Exception:
+                    try:
+                        created_epoch = int(
+                            datetime.fromisoformat(str(created_value).strip())
+                            .replace(tzinfo=None).timestamp()
+                        )
+                    except Exception:
+                        created_epoch = int(time.time() - age)
+
+            account_id = str(
+                login_sheet.range("B13").value
+                or session_sheet.range("B4").value
+                or uid
+            ).strip()
+            refresh_token = str(
+                login_sheet.range("B14").value
+                or session_sheet.range("B5").value
+                or ""
+            ).strip()
+            created_iso = session_sheet.range("B3").value
+            if created_iso in (None, ""):
+                created_iso = datetime.fromtimestamp(created_epoch).isoformat(timespec="seconds")
+
+            login_sheet.range("B8").value = cached_token
+            login_sheet.range("B9").value = cached_token
+            login_sheet.range("B12").value = created_epoch
+            login_sheet.range("B13").value = account_id
+            login_sheet.range("B14").value = refresh_token
+
+            session_sheet.range("B1").value = cached_token
+            session_sheet.range("B2").value = cached_token
+            session_sheet.range("B3").value = created_iso
+            session_sheet.range("B4").value = account_id
+            session_sheet.range("B5").value = refresh_token
+            session_sheet.range("B6").value = uid
+            try:
+                session_sheet.visible = False
+            except Exception:
+                pass
+            workbook.save()
+            print(
+                f"Reusing valid Shoonya OAuth session ({age / 3600:.1f} hours old); "
+                "blank LOGIN session cells have been restored."
+            )
             return candidate
         print("Saved OAuth token failed broker validation; requesting a fresh session.")
     elif cached_token:
