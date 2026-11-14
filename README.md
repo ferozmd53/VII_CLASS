@@ -34,7 +34,9 @@ C:\Python313\python.exe -m pip install --upgrade --no-cache-dir git+https://gith
 | B3 | Shoonya User ID |
 | B4 | Shoonya password |
 | B5 | TOTP secret |
-| B6 | Shoonya API secret |\n| B15 | Broker-registered Shoonya Algo ID (required for live orders) |\n| B24 | SL-LMT Market Safety percentage (default 1; allowed 0–10) |
+| B6 | Shoonya API secret |
+| B15 | Broker-registered Shoonya Algo ID (required for live orders) |
+| B24 | SL-LMT Market Safety percentage (default 1; allowed 0–10) |
 
 The first login opens a temporary Chrome/Edge window and saves the OAuth session in the workbook. A valid saved session is reused; the browser is opened again only when the saved token is invalid or expired.
 
