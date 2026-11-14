@@ -45,9 +45,16 @@ class IndicatorEngine:
         try:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=self.load_days)
+            # Shoonya identifies the NSE spot index by its broker symbol
+            # "Nifty 50", while the workbook alias remains NSE:NIFTY INDEX.
+            history_symbol = (
+                "Nifty 50"
+                if exchange.upper() == "NSE" and symbol.strip().upper() == "NIFTY INDEX"
+                else symbol
+            )
             raw = api.get_daily_price_series(
                 exchange=exchange,
-                tradingsymbol=symbol,
+                tradingsymbol=history_symbol,
                 startdate=str(int(start_date.timestamp())),
                 enddate=str(int(end_date.timestamp()))
             )
