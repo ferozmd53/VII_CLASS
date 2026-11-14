@@ -378,11 +378,14 @@ class IntradayIndicatorEngine:
                 )
                 self.history[(key, interval)] = live_frame
 
+        has_data = any(
+            result is not None and len(result) == 4 and result[1] is not None
+            for result in results.values()
+        )
         status = (
-            "CANDLE NOT IN HISTORY" if selected_time is not None
-            and not any(results.values())
+            "CANDLE NOT IN HISTORY" if selected_time is not None and not has_data
             else "HISTORICAL CANDLE" if selected_time is not None
-            else "LIVE" if any(results.values())
+            else "LIVE" if has_data
             else "LOADING HISTORY"
         )
         self.latest[symbol] = (ltp, results, status)
