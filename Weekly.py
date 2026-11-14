@@ -31,6 +31,7 @@ class WeeklyDataEngine:
         self.sheet_ready = False
         self.last_refresh_monotonic = 0.0
         self.last_history_error = {}
+        self.refresh_at = {}
 
     @staticmethod
     def _number(value):
@@ -164,25 +165,35 @@ class WeeklyDataEngine:
             return None
 
     def _get_history(self, api, exchange, symbol, key):
-        if key in self.history:
-            return self.history[key]
+        frame = self.history.get(key)
         future = self.pending.get(key)
-        if future is None:
-            if time.time() >= self.retry_at.get(key, 0):
+
+        if future is not None and future.done():
+            self.pending.pop(key, None)
+            try:
+                refreshed = future.result()
+                if refreshed is not None and not refreshed.empty:
+                    frame = refreshed
+                    self.history[key] = refreshed
+                    self.refresh_at[key] = time.time() + 60
+            except Exception as exc:
+                print(f"Weekly history worker error for {exchange}:{symbol}: {exc}")
+                self.refresh_at[key] = time.time() + self.retry_seconds
+
+        if frame is None:
+            if future is None and time.time() >= self.retry_at.get(key, 0):
                 self.pending[key] = self.executor.submit(
                     self._fetch_history, api, exchange, symbol, key
                 )
             return None
-        if not future.done():
-            return None
-        self.pending.pop(key, None)
-        try:
-            frame = future.result()
-        except Exception as exc:
-            print(f"Weekly history worker error for {exchange}:{symbol}: {exc}")
-            frame = None
-        if frame is not None:
-            self.history[key] = frame
+
+        # Keep the current weekly summary synchronized with newly published
+        # broker daily candles while keeping the Excel/live loop non-blocking.
+        if key not in self.pending and time.time() >= self.refresh_at.get(key, 0):
+            self.refresh_at[key] = time.time() + 60
+            self.pending[key] = self.executor.submit(
+                self._fetch_history, api, exchange, symbol, key
+            )
         return frame
 
     def update(self, api, exchange, symbol, quote=None):
