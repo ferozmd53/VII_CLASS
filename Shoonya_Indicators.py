@@ -203,15 +203,19 @@ class IndicatorEngine:
             # Shoonya daily history may return DD-MMM-YYYY, DD/MM/YYYY
             # with a time, or an epoch-seconds field depending on SDK/API version.
             if "datetime" not in frame and "epoch" in frame:
-                frame["datetime"] = pd.to_numeric(frame["epoch"], errors="coerce")
-                frame["datetime"] = pd.to_datetime(frame["datetime"], unit="s", errors="coerce")
+                epoch_values = pd.to_numeric(frame["epoch"], errors="coerce")
+                frame["datetime"] = pd.to_datetime(
+                    epoch_values, unit="s", utc=True, errors="coerce"
+                ).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
             elif "datetime" in frame:
                 parsed = frame["datetime"].map(
                     lambda value: pd.to_datetime(value, dayfirst=True, errors="coerce")
                 )
                 if "epoch" in frame:
                     epoch_values = pd.to_numeric(frame["epoch"], errors="coerce")
-                    epoch_dates = pd.to_datetime(epoch_values, unit="s", errors="coerce")
+                    epoch_dates = pd.to_datetime(
+                        epoch_values, unit="s", utc=True, errors="coerce"
+                    ).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
                     parsed = parsed.fillna(epoch_dates)
                 frame["datetime"] = parsed
 
@@ -293,41 +297,44 @@ class IndicatorEngine:
         lower = middle - self.bb_std * deviation
         return rsi, stoch, sma_stoch, upper, middle, lower
 
-    def update(self, api, exchange, symbol, ltp):
+    def update(self, api, exchange, symbol, ltp=None):
+        """Calculate daily indicators from broker daily candles only.
+
+        The WebSocket LTP and the PC clock are deliberately not used to
+        overwrite or fabricate daily OHLC rows. This keeps daily indicators
+        aligned with the broker's actual candle timestamps.
+        """
         exchange = str(exchange or "").upper().strip()
         symbol = str(symbol or "").upper().strip()
         if exchange not in self.SUPPORTED_EXCHANGES or not symbol:
             return self._empty()
-        try:
-            ltp = float(ltp)
-        except (TypeError, ValueError):
-            return self._empty()
-        if ltp <= 0:
-            return self._empty()
 
         key = f"{exchange}|{symbol}"
-        if self.last_ltp.get(key) == ltp and key in self.last_result:
-            return self.last_result[key]
-
         frame = self._get_history_without_waiting(api, exchange, symbol, key)
         if frame is None or frame.empty:
             return self._empty()
 
-        today = datetime.now().date()
-        latest_day = frame["datetime"].iloc[-1].date()
-        if latest_day == today:
-            frame.loc[frame.index[-1], "close"] = ltp
-        else:
-            # Add today's working candle once, then update its close on each tick.
-            new_bar = frame.iloc[-1].copy()
-            new_bar["datetime"] = pd.Timestamp(today)
-            new_bar["close"] = ltp
-            frame = pd.concat([frame, pd.DataFrame([new_bar])], ignore_index=True)
-        self.history[key] = frame
-        closes = frame["close"].astype(float).tolist()
-        if len(closes) < self.length_bb + 2:
+        frame = frame.copy()
+        frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+        frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+        frame = frame.dropna(subset=["datetime", "close"])
+        frame = frame.sort_values("datetime").drop_duplicates("datetime", keep="last")
+        if len(frame) < self.length_bb + 2:
             return self._empty()
 
+        # Cache by the actual newest broker candle, not by LTP. The same
+        # candle can be recalculated when the broker updates its OHLC values.
+        latest = frame.iloc[-1]
+        candle_key = (
+            str(latest["datetime"]), float(latest["close"]),
+            float(latest["open"]) if "open" in frame and pd.notna(latest.get("open")) else None,
+            float(latest["high"]) if "high" in frame and pd.notna(latest.get("high")) else None,
+            float(latest["low"]) if "low" in frame and pd.notna(latest.get("low")) else None,
+        )
+        if self.last_ltp.get(key) == candle_key and key in self.last_result:
+            return self.last_result[key]
+
+        closes = frame["close"].astype(float).tolist()
         rsi, stoch, sma_stoch, upper, middle, lower = self._calculate(closes)
         current = len(closes) - 1
         previous = current - 1
@@ -355,6 +362,6 @@ class IndicatorEngine:
             "BUY" if buy_signal else "",
             "SELL" if sell_signal else "",
         ]
-        self.last_ltp[key] = ltp
+        self.last_ltp[key] = candle_key
         self.last_result[key] = result
         return result
