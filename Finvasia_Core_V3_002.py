@@ -1738,10 +1738,9 @@ def start_Trade_Terminal():
         tt.range(f"{order_id_col}4:{order_id_col}1000").number_format = "@"
     for order_status_col in ("S", "Y"):
         tt.range(f"{order_status_col}4:{order_status_col}1000").number_format = "@"
-    tt.range("R:Z").column_width = 18
-    tt.range("S:S").column_width = 26
-    tt.range("Y:Y").column_width = 26
-    tt.range("AG:AN").column_width = 13
+    # Preserve the column widths already configured by the user in Excel.
+    # Do not assign column_width during startup; this used to resize R:Z and AG:AN
+    # every time run.py initialized the LIVE_TRADE sheet.
     try:
         tt.range("BA:BS").api.EntireColumn.Hidden = True
     except Exception as hide_error:
