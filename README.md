@@ -104,3 +104,10 @@ python run.py "C:\\full\\path\\VII_CLASS.xlsm"
 - Shoonya OAuth reuse and indicator logic: [Shoonya-Multi-Symbol-Live-Historical-Data-with-Indicators](https://github.com/ferozmd53/Shoonya-Multi-Symbol-Live-Historical-Data-with-Indicators).
 
 The original Finvasia source attribution and license are retained in this repository. This project is an integration; it is not an official Shoonya or Finvasia product.
+
+
+## Live weekly OHLCV
+
+The separate `Weekly.py` module creates a `WEEKLY_DATA` worksheet automatically. It loads recent daily candles in background workers, combines them into the current Monday-to-Friday trading week, and refreshes the current day's values from live Shoonya ticks.
+
+Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. The Volume value is the sum of daily volumes for the current week, with today's cumulative live volume replacing the historical value for today. This sheet is a current-week summary per subscribed terminal symbol; it does not place or modify orders.
