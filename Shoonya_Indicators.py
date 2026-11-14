@@ -73,8 +73,7 @@ class IndicatorEngine:
             frame = pd.DataFrame(rows)
             frame.rename(columns={
                 "time": "datetime", "into": "open", "inth": "high",
-                "intl": "low", "intc": "close", "intv": "volume",
-                "intv": "volume", "ssboe": "epoch"
+                "intl": "low", "intc": "close", "intv": "volume", "ssboe": "epoch"
             }, inplace=True)
 
             # Shoonya daily history may return DD-MMM-YYYY, DD/MM/YYYY
