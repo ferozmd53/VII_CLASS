@@ -136,7 +136,9 @@ class IntradayIndicatorEngine:
 
     # Pine inputs supplied by the user.
     MIRROR_LENGTH = 5
-    MIRROR_MULTIPLIER = -0.3
+    MIRROR_MULTIPLIER = -0.3         # matches the TradingView inputs you use
+    LIVE_LTP_MERGE = True            # fold WebSocket LTP into the forming candle (TV updates high/low tick by tick)
+    FIRST_BAR_TIME = None            # e.g. "2026-11-02 09:15": time of the FIRST bar TV loaded; trims history so bar_index==200 matches TV
     CHANNEL_WIDTH = 0.7
     CHANNEL_ATR_LENGTH = 200
     CHANNEL_HIGHEST_LENGTH = 100
@@ -382,11 +384,16 @@ class IntradayIndicatorEngine:
             return None, None
 
         settings = settings or {}
+        first_bar = settings.get("first_bar_time", self.FIRST_BAR_TIME)
+        if first_bar and "datetime" in frame:
+            keep = pd.to_datetime(frame["datetime"], errors="coerce") >= pd.Timestamp(first_bar)
+            if keep.any():
+                frame = frame[keep].reset_index(drop=True)
         mirror_source = self._source(frame, settings.get("mirror_source", "open"))
-        mirror_sma_source = self._source(frame, settings.get("mirror_sma_source", "high"))
+        mirror_sma_source = self._source(frame, settings.get("mirror_sma_source", "low"))
         mirror_length = max(1, int(settings.get("mirror_length", self.MIRROR_LENGTH)))
         mirror_multiplier = float(settings.get("mirror_multiplier", self.MIRROR_MULTIPLIER))
-        channel_source = self._source(frame, settings.get("channel_source", "high"))
+        channel_source = self._source(frame, settings.get("channel_source", "low"))
         atr_length = max(1, int(settings.get("atr_length", self.CHANNEL_ATR_LENGTH)))
         highest_length = max(1, int(settings.get("atr_highest", self.CHANNEL_HIGHEST_LENGTH)))
         channel_width = float(settings.get("channel_multiplier", self.CHANNEL_WIDTH))
@@ -402,7 +409,7 @@ class IntradayIndicatorEngine:
         step_values = []
         upper_values = []
         lower_values = []
-        initial_bar = atr_length
+        initial_bar = int(settings.get("initial_bar", self.CHANNEL_INITIAL_BAR))  # Pine: bar_index == 200 (fixed)
         for index in range(len(frame)):
             previous_step = step_values[index - 1] if index else float("nan")
             width = channel_atr.iloc[index]
@@ -430,12 +437,13 @@ class IntradayIndicatorEngine:
         current = len(frame) - 1
         mirror_value = mirror_upper.iloc[current]
         mirror_value = round(float(mirror_value), 4) if pd.notna(mirror_value) else None
-        # upperpink is the upper ATR-step band (st[1] + ATR width).
-        upperpink = upper_values[current]
+        # Pine: plot(st, "upperpink", fuchsia) -> the plotted value is the STEP line `st`,
+        # not the upper band (st[1] + ATR). Old code returned the band, so it never matched.
+        upperpink = step_values[current]
         upperpink = round(float(upperpink), 4) if pd.notna(upperpink) and upperpink > 0 else None
         return upperpink, mirror_value
 
-    def _result_for_interval(self, history, interval, settings):
+    def _result_for_interval(self, history, interval, settings, ltp=None):
         """Use the newest timestamped candle returned by Shoonya; never invent one."""
         if history is None or history.empty:
             return None, None, None, None
@@ -449,6 +457,16 @@ class IntradayIndicatorEngine:
         # Shoonya history is the source of truth for both candle time and OHLCV.
         # Do not synthesize a candle from local PC time or the latest WebSocket LTP.
         frame = frame.drop_duplicates("datetime", keep="last").reset_index(drop=True)
+        # Broker REST candles are refreshed only every HISTORY_REFRESH_SECONDS, so the
+        # forming candle's high/low/close go stale. TradingView updates them every tick,
+        # and the mirror band uses the CURRENT bar's high -> fold LTP in. Only the candle
+        # matching the PC clock bucket (or the one right after the last broker candle) is
+        # touched, so nothing is invented after market hours.
+        if self.LIVE_LTP_MERGE and ltp:
+            bucket = pd.Timestamp(datetime.now()).floor(f"{interval}min")
+            gap = bucket - pd.Timestamp(frame["datetime"].iloc[-1])
+            if timedelta(0) <= gap <= timedelta(minutes=interval):
+                frame = self._merge_live_candle(frame, ltp, datetime.now(), interval)
         candle = frame.iloc[-1]
         upperpink, mirror_upper = self._calculate(
             frame, interval, live=True, settings=settings
@@ -478,7 +496,7 @@ class IntradayIndicatorEngine:
             if history is None:
                 results[interval] = None
                 continue
-            result = self._result_for_interval(history, interval, settings)
+            result = self._result_for_interval(history, interval, settings, ltp)
             results[interval] = result
 
         has_data = any(
@@ -543,16 +561,9 @@ class IntradayIndicatorEngine:
                     for col_number, default_value in enumerate(defaults, start=1):
                         if existing[col_number - 1] in (None, ""):
                             sheet.range((row_number, col_number)).value = default_value
-                # Migrate only the previous built-in defaults to the exact uploaded
-                # TradingView reference values; preserve other custom Excel settings.
-                try:
-                    old_mirror_multiplier = float(sheet.range("J1").value)
-                    if old_mirror_multiplier in (0.5, 1.7):
-                        sheet.range("J1").value = -0.3
-                except (TypeError, ValueError):
-                    pass
-                if str(sheet.range("F1").value or "").strip().lower() == "high":
-                    sheet.range("F1").value = "low"
+                # NOTE: the old migration that rewrote J1 (0.5/1.7 -> -0.3) and F1
+                # (high -> low) on every start-up was removed so the INTRADAY input
+                # cells are never overwritten; set them to your TradingView inputs.
                 try:
                     old_history_days = int(float(sheet.range("L1").value))
                     if old_history_days == 7:
@@ -583,9 +594,9 @@ class IntradayIndicatorEngine:
 
             settings = {
                 "mirror_source": input_value("D1", "open"),
-                "mirror_sma_source": input_value("F1", "high"),
+                "mirror_sma_source": input_value("F1", "low"),
                 "mirror_length": input_value("H1", 5),
-                "mirror_multiplier": input_value("J1", 0.5),
+                "mirror_multiplier": input_value("J1", -0.3),
                 "channel_source": input_value("B2", "low"),
                 "atr_length": input_value("D2", 200),
                 "atr_highest": input_value("F2", 100),
