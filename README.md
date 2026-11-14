@@ -40,6 +40,23 @@ The first login opens a temporary Chrome/Edge window and saves the OAuth session
 
 The access token is stored in `LOGIN!B8:B14` and a hidden `SESSION` sheet. Keep the workbook private. The terminal uses the `LOGIN` sheet as the main settings sheet; legacy `Config` settings are copied into `LOGIN` on first startup.
 
+### Indicator and historical-data settings
+
+The indicator engine reads its settings from the same `LOGIN` sheet. Enter values in column B; if a cell is blank or invalid, the default is inserted automatically.
+
+| LOGIN cell | Setting | Default |
+|---|---|---:|
+| B16 | Historical Days | 500 |
+| B17 | RSI Length | 14 |
+| B18 | StochRSI Length | 14 |
+| B19 | SMA Stoch Length | 3 |
+| B20 | Bollinger Length | 20 |
+| B21 | Bollinger StdDev | 2.0 |
+| B22 | Stoch Upper | 70 |
+| B23 | Stoch Lower | 30 |
+
+These settings are loaded when the terminal starts. Historical candles are downloaded in background workers; changing these values takes effect after restarting the terminal. The existing indicator formulas and Excel output columns are unchanged.
+
 
 ## Live-only trading and alerts
 
