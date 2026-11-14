@@ -509,7 +509,7 @@ def get_login_settings_sheet(workbook):
         workbook.save()
 
     # Account-specific and order-pricing settings live in the workbook, not source code.
-    login_sheet.range("A15").value = "Shoonya Algo ID"
+    login_sheet.range("A15").value = "Auto Algo ID (User ID + _U)"
     login_sheet.range("A24").value = "Market Safety (%)"
     if login_sheet.range("B24").value in (None, ""):
         login_sheet.range("B24").value = 1.0
@@ -518,13 +518,16 @@ def get_login_settings_sheet(workbook):
 
 
 def get_shoonya_algo_id():
-    """Read the account-specific Shoonya Algo ID from LOGIN!B15."""
+    """Build Shoonya Algo ID automatically from LOGIN!B3 (User ID) plus _U."""
     login_sheet = get_login_settings_sheet(get_terminal_workbook())
-    algo_id = str(login_sheet.range("B15").value or "").strip()
-    if not algo_id:
+    user_id = str(login_sheet.range("B3").value or "").strip()
+    if not user_id:
         raise RuntimeError(
-            "Shoonya Algo ID is missing. Enter your broker-registered Algo ID in LOGIN!B15."
+            "Shoonya User ID is missing. Enter your User ID in LOGIN!B3."
         )
+    # Avoid producing USERID_U_U if the suffix is already present.
+    algo_id = user_id if user_id.upper().endswith("_U") else user_id + "_U"
+    login_sheet.range("B15").value = algo_id
     return algo_id
 
 
