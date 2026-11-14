@@ -96,7 +96,7 @@ The `Intraday_Indicators.py` module creates a separate `INTRADAY` worksheet with
 
 The sheet displays 1-minute and 5-minute OHLCV, `upperpink`, and `mirrorUpperBand`. Indicator settings and the number of history days are editable in rows 1 and 2. Enter a full historical candle date and time in `INTRADAY!N1` using `dd-mm-yyyy hh:mm` format (example: `14-11-2026 10:15`) to inspect that candle; clear `N1` to return to live values. Separate 1m and 5m candle timestamps are displayed beside their OHLCV and indicator values.
 
-History downloads run asynchronously and the live sheet refreshes about once per second. The ATR channel needs sufficient warm-up history; values remain blank until enough valid candles are available. This module does not place or modify orders.
+History downloads run asynchronously and the live sheet refreshes about once per second. Both timeframes use Shoonya's timestamped historical candles as the source of truth; the engine does not invent candles from the PC clock or WebSocket LTP. The ATR channel needs sufficient warm-up history; values remain blank until enough valid candles are available. This module does not place or modify orders.
 
 ## Start
 
@@ -119,9 +119,9 @@ The original Finvasia source attribution and license are retained in this reposi
 
 ## Live weekly OHLCV
 
-The separate `Weekly.py` module creates a `WEEKLY_DATA` worksheet automatically. It loads recent daily candles in background workers, combines them into the current Monday-to-Friday trading week, and refreshes the current day's values from live Shoonya ticks.
+The separate `Weekly.py` module creates a `WEEKLY_DATA` worksheet automatically. It loads recent daily candles in background workers and combines the available broker daily candles into weekly OHLCV. It does not overwrite broker candles with WebSocket LTP or create a candle from the PC date; the newest available broker candle determines the week shown.
 
-Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. The Volume value is the sum of daily volumes for the current week, with today's cumulative live volume replacing the historical value for today. This sheet is a current-week summary for the symbols selected in `WEEKLY_DATA!A4:A1000`; it does not place or modify orders.
+Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. The Volume value is the sum of daily volumes returned in the broker history for the displayed week. This sheet is a current-week summary for the symbols selected in `WEEKLY_DATA!A4:A1000`; it does not place or modify orders.
 
 
 ### Weekly symbol selection and row layout
