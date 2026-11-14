@@ -96,9 +96,18 @@ class WeeklyDataEngine:
         return frame.reset_index(drop=True) if not frame.empty else None
 
     def _fetch_history(self, api, exchange, symbol, key):
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=self.history_days)
+        end_date = datetime.now().replace(hour=23, minute=59, second=59, microsecond=0)
+        start_date = (end_date - timedelta(days=self.history_days)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         try:
+            if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
+                print(
+                    f"BSE:SENSEX weekly history request: symbol={symbol}, "
+                    f"exchange={exchange}, days={self.history_days}, "
+                    f"from={start_date.strftime('%Y-%m-%d %H:%M:%S')}, "
+                    f"to={end_date.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
             # Keep the workbook alias, but request history using Shoonya's
             # actual NSE spot-index trading symbol.
             history_symbol = (
@@ -112,6 +121,13 @@ class WeeklyDataEngine:
                 startdate=str(int(start_date.timestamp())),
                 enddate=str(int(end_date.timestamp()))
             )
+            if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
+                raw_count = len(raw) if isinstance(raw, (list, tuple)) else "not-a-list"
+                print(
+                    f"BSE:SENSEX weekly raw history response: "
+                    f"type={type(raw).__name__}, count={raw_count}, "
+                    f"sample={str(raw[:2] if isinstance(raw, (list, tuple)) else raw)[:1200]}"
+                )
             frame = self._parse_history(raw)
             if frame is None:
                 message = raw.get("emsg") or raw.get("stat") if isinstance(raw, dict) else "no daily candles"
