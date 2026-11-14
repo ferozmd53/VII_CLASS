@@ -3,8 +3,8 @@
 Historical candle downloads run in background workers so the Excel live-data loop
 and Shoonya WebSocket callback are not held up by history requests.
 
-Outputs are written to Trade_Terminal!AD:AK:
-RSI, StochRSI, SMA Stoch, BB Upper, BB Middle, BB Lower, BUY Signal, SELL Signal.
+Outputs are written to LIVE_TRADE!AG:AN for supported Shoonya exchanges:
+NSE, NFO, BSE, BFO, CDS and MCX.
 """
 import json
 import time
@@ -15,6 +15,8 @@ import pandas as pd
 
 
 class IndicatorEngine:
+    SUPPORTED_EXCHANGES = {"NSE", "NFO", "BSE", "BFO", "CDS", "MCX"}
+
     def __init__(
         self, load_days=500, retry_seconds=300, length_rsi=14,
         length_stoch=14, length_sma_stoch=3, length_bb=20,
@@ -179,7 +181,7 @@ class IndicatorEngine:
     def update(self, api, exchange, symbol, ltp):
         exchange = str(exchange or "").upper().strip()
         symbol = str(symbol or "").upper().strip()
-        if exchange != "NSE" or not symbol:
+        if exchange not in self.SUPPORTED_EXCHANGES or not symbol:
             return self._empty()
         try:
             ltp = float(ltp)
