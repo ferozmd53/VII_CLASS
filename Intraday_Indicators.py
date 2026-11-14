@@ -318,7 +318,8 @@ class IntradayIndicatorEngine:
             return round(float(value), 4) if pd.notna(value) else None
 
         return [
-            rounded(mirror_upper), rounded(sma), rounded(deviation),
+            rounded(mirror_upper), rounded(real_upper),
+            rounded(sma), rounded(deviation),
             round(current_step, 4),
             round(float(up_now), 4) if not pd.isna(up_now) else None,
             round(float(low_now), 4) if not pd.isna(low_now) else None,
