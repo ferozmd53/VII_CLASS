@@ -108,12 +108,12 @@ class CandleCache:
                 ) ORDER BY datetime
             """
             params.append(int(limit))
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(query, params).fetchall()
         return pd.DataFrame(rows, columns=["datetime", "open", "high", "low", "close", "volume"]) if rows else None
 
     def latest_time(self, exchange, symbol, timeframe):
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute("""
                 SELECT MAX(candle_time) FROM candles
                 WHERE exchange=? AND symbol=? AND timeframe=?
