@@ -29,7 +29,7 @@ import xlwings as xw
 INPUT_FILL_DELAY_SEC = 3.0
 LAUNCH_TIMEOUT_SEC   = 20
 AUTH_CACHE_TTL_SEC   = 120.0
-WORKBOOK_NAME        = "Finvasia_Trade_Terminal_v3.xlsm"
+WORKBOOK_NAME        = "VII_CLASS.xlsm"
 
 _auth_cache = {"code": None, "ts": 0.0}
 _auth_lock  = threading.Lock()
