@@ -60,28 +60,59 @@ class IndicatorEngine:
                         continue
                 if isinstance(item, dict):
                     rows.append(item)
+            if isinstance(raw, dict):
+                message = raw.get("emsg") or raw.get("stat") or str(raw)
+                print(f"Daily indicator history rejected for {exchange}:{symbol}: {message}")
+                self.retry_at[key] = now + self.retry_seconds
+                return None
             if not rows:
+                print(f"Daily indicator history returned no candles for {exchange}:{symbol}")
                 self.retry_at[key] = now + self.retry_seconds
                 return None
 
             frame = pd.DataFrame(rows)
             frame.rename(columns={
                 "time": "datetime", "into": "open", "inth": "high",
-                "intl": "low", "intc": "close", "intv": "volume"
+                "intl": "low", "intc": "close", "intv": "volume",
+                "intv": "volume", "ssboe": "epoch"
             }, inplace=True)
+
+            # Shoonya daily history may return DD-MMM-YYYY, DD/MM/YYYY
+            # with a time, or an epoch-seconds field depending on SDK/API version.
+            if "datetime" not in frame and "epoch" in frame:
+                frame["datetime"] = pd.to_numeric(frame["epoch"], errors="coerce")
+                frame["datetime"] = pd.to_datetime(frame["datetime"], unit="s", errors="coerce")
+            elif "datetime" in frame:
+                parsed = frame["datetime"].map(
+                    lambda value: pd.to_datetime(value, dayfirst=True, errors="coerce")
+                )
+                if "epoch" in frame:
+                    epoch_values = pd.to_numeric(frame["epoch"], errors="coerce")
+                    epoch_dates = pd.to_datetime(epoch_values, unit="s", errors="coerce")
+                    parsed = parsed.fillna(epoch_dates)
+                frame["datetime"] = parsed
+
             if "datetime" not in frame or "close" not in frame:
+                print(f"Daily indicator history has unexpected fields for {exchange}:{symbol}: {list(frame.columns)}")
                 self.retry_at[key] = now + self.retry_seconds
                 return None
-            frame["datetime"] = pd.to_datetime(
-                frame["datetime"], format="%d-%b-%Y", errors="coerce"
-            )
+
             frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
             frame = frame.dropna(subset=["datetime", "close"])
             frame = frame.sort_values("datetime").drop_duplicates("datetime").reset_index(drop=True)
             if len(frame) < self.length_bb + 2:
+                print(
+                    f"Daily indicator history too short for {exchange}:{symbol}: "
+                    f"{len(frame)} candles; need at least {self.length_bb + 2}"
+                )
                 self.retry_at[key] = now + self.retry_seconds
                 return None
             self.retry_at[key] = now + self.retry_seconds
+            print(
+                f"Daily indicator history loaded for {exchange}:{symbol}: "
+                f"{len(frame)} candles ({frame['datetime'].iloc[0].date()} to "
+                f"{frame['datetime'].iloc[-1].date()})"
+            )
             return frame
         except Exception as exc:
             print(f"Daily indicator history unavailable for {exchange}:{symbol}: {exc}")
