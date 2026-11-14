@@ -52,6 +52,7 @@ class IntradayIndicatorEngine:
         self.latest = {}
         self.last_refresh = 0.0
         self.sheet_ready = False
+        self.last_written_row = 3
 
     @staticmethod
     def _number(value):
@@ -387,8 +388,20 @@ class IntradayIndicatorEngine:
                 self.sheet_ready = True
 
             symbols = sheet.range("A4:A1000").value or []
+            last_index = max(
+                (index for index, value in enumerate(symbols)
+                 if str(value or "").strip()),
+                default=-1,
+            )
+            last_row = 4 + last_index
+            if last_index < 0:
+                if self.last_written_row > 3:
+                    sheet.range(f"A4:Z{self.last_written_row}").clear_contents()
+                    self.last_written_row = 3
+                return
+
             output = []
-            for value in symbols:
+            for value in symbols[:last_index + 1]:
                 symbol = str(value or "").strip().upper()
                 if not symbol or ":" not in symbol:
                     output.append([None] * len(self.HEADERS))
@@ -412,6 +425,9 @@ class IntradayIndicatorEngine:
                     + [status]
                 )
 
-            sheet.range("A4:Z1000").value = output
+            sheet.range(f"A4:Z{last_row}").value = output
+            if self.last_written_row > last_row:
+                sheet.range(f"A{last_row + 1}:Z{self.last_written_row}").clear_contents()
+            self.last_written_row = last_row
         except Exception as exc:
             print(f"INDICATOR sheet refresh failed: {exc}")
