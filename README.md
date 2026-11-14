@@ -57,7 +57,9 @@ The indicator engine reads its settings from the same `LOGIN` sheet. Enter value
 | B22 | Stoch Upper | 70 |
 | B23 | Stoch Lower | 30 |
 
-The terminal reads the Algo ID from `LOGIN!B15` for every order and square-off request; it does not guess or silently substitute an ID. Enter the exact Algo ID registered with Shoonya. The SL-LMT safety buffer is read from `LOGIN!B24` (default 1%).\n\nThese settings are loaded when the terminal starts and are also monitored while the terminal runs. If you edit any value in `LOGIN!B16:B23`, the indicator engine automatically reloads with the new settings, clears the old indicator output, and downloads fresh history in background workers; restarting the terminal is not required. The existing indicator formulas and Excel output columns are unchanged.
+The terminal reads the Algo ID from `LOGIN!B15` for every order and square-off request; it does not guess or silently substitute an ID. Enter the exact Algo ID registered with Shoonya. The SL-LMT safety buffer is read from `LOGIN!B24` (default 1%).
+
+These settings are loaded when the terminal starts and are also monitored while the terminal runs. If you edit any value in `LOGIN!B16:B23`, the indicator engine automatically reloads with the new settings, clears the old indicator output, and downloads fresh history in background workers; restarting the terminal is not required. The existing indicator formulas and Excel output columns are unchanged.
 
 
 ## Live-only trading and alerts
