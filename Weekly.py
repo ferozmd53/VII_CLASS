@@ -209,7 +209,7 @@ class WeeklyDataEngine:
             return None
         candle = weekly.loc[current_week]
         week_start = current_week.start_time.date()
-        week_end = current_week.end_time.date()
+        week_end = week_start + timedelta(days=4)
         self.latest_rows[key] = [
             f"{exchange}:{symbol}", exchange, week_start.isoformat(),
             week_end.isoformat(),
