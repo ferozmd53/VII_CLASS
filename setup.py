@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="VII_CLASS",
-    version="1.0.3",
+    version="1.0.4",
     description="Shoonya OAuth-enabled Finvasia Excel terminal with indicators",
     py_modules=[
         "VII_CLASS",
