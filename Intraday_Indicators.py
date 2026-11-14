@@ -612,6 +612,7 @@ class IntradayIndicatorEngine:
                 # M1:N1 is the historical candle selector; blank N1 means latest live candle.
                 if sheet.range("M1").value in (None, ""):
                     sheet.range("M1").value = "CHECK CANDLE TIME"
+                sheet.range("N1").api.NumberFormat = "dd/mm/yyyy hh:mm"
                 sheet.range("A3:V3").value = [self.HEADERS]
                 sheet.range("W3:Z1000").clear_contents()
                 sheet.range("A1:N2").api.Font.Bold = True
