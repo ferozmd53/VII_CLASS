@@ -360,6 +360,11 @@ class IntradayIndicatorEngine:
         sheet = workbook.sheets.add("INDICATOR")
         print("Created INDICATOR sheet for live 1-minute and 5-minute indicators.")
         try:
+            workbook.save()
+            print("INDICATOR worksheet saved in the active VII_CLASS workbook.")
+        except Exception as save_error:
+            print(f"INDICATOR worksheet created but workbook save failed: {save_error}")
+        try:
             source = next(
                 (item for item in workbook.sheets
                  if item.name in ("LIVE_TRADE", "Trade_Terminal")),
