@@ -354,15 +354,15 @@ class IntradayIndicatorEngine:
         return results.get(1), results.get(5), status
 
     def _get_or_create_sheet(self, workbook):
-        """Return the INDICATOR sheet, creating it and seeding symbols if needed."""
+        """Return the INTRADAY sheet, creating it and seeding symbols if needed."""
         names = [sheet.name for sheet in workbook.sheets]
-        is_new = "INDICATOR" not in names
+        is_new = "INTRADAY" not in names
 
         if is_new:
-            sheet = workbook.sheets.add("INDICATOR")
-            print("Created INDICATOR sheet for live 1-minute and 5-minute indicators.")
+            sheet = workbook.sheets.add("INTRADAY")
+            print("Created INTRADAY sheet for live 1-minute and 5-minute indicators.")
         else:
-            sheet = workbook.sheets["INDICATOR"]
+            sheet = workbook.sheets["INTRADAY"]
 
         # Seed symbols both on first creation and when an existing sheet is blank.
         try:
@@ -378,13 +378,13 @@ class IntradayIndicatorEngine:
                     source_symbols = source.range("A4:A1000").value or []
                     if any(str(value or "").strip() for value in source_symbols):
                         sheet.range("A4:A1000").value = source_symbols
-                        print("Copied symbols from the live trade sheet into INDICATOR!A4:A1000.")
+                        print("Copied symbols from the live trade sheet into INTRADAY!A4:A1000.")
                     else:
-                        print("INDICATOR sheet is ready; no symbols found in the live trade sheet.")
+                        print("INTRADAY sheet is ready; no symbols found in the live trade sheet.")
                 else:
-                    print("INDICATOR sheet is ready; add EXCHANGE:TRADINGSYMBOL values in column A.")
+                    print("INTRADAY sheet is ready; add EXCHANGE:TRADINGSYMBOL values in column A.")
         except Exception as exc:
-            print(f"Could not seed INDICATOR symbols from the live trade sheet: {exc}")
+            print(f"Could not seed INTRADAY symbols from the live trade sheet: {exc}")
 
         return sheet, is_new
 
@@ -405,9 +405,9 @@ class IntradayIndicatorEngine:
                 self.sheet_ready = True
                 try:
                     workbook.save()
-                    print("INDICATOR sheet headers and symbol list saved to the active workbook.")
+                    print("INTRADAY sheet headers and symbol list saved to the active workbook.")
                 except Exception as save_error:
-                    print(f"INDICATOR sheet save failed: {save_error}")
+                    print(f"INTRADAY sheet save failed: {save_error}")
 
             symbols = sheet.range("A4:A1000").value or []
             last_index = max(
@@ -452,4 +452,4 @@ class IntradayIndicatorEngine:
                 sheet.range(f"A{last_row + 1}:Z{self.last_written_row}").clear_contents()
             self.last_written_row = last_row
         except Exception as exc:
-            print(f"INDICATOR sheet refresh failed: {exc}")
+            print(f"INTRADAY sheet refresh failed: {exc}")
