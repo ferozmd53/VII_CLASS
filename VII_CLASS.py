@@ -1905,15 +1905,6 @@ def start_Trade_Terminal():
                         market_rows.append(values)
                     market_sheet.range("B4:L1000").value = market_rows
 
-                    # Keep the new intraday indicator worksheet on this independent
-                    # Excel writer thread so its history/worksheet work cannot delay
-                    # the main order-dispatch loop.
-                    intraday_indicator_engine.refresh_from_excel(
-                        get_terminal_workbook(), api,
-                        request_weekly_symbol_subscription,
-                        get_weekly_symbol_quote,
-                        lambda symbol: Symbol_Token.get(_extract_symbol(symbol))
-                    )
                 except Exception as market_error:
                     if not is_excel_connection_lost():
                         print(f"Live market-data refresh error (order workers continue): {market_error}")
@@ -1939,6 +1930,14 @@ def start_Trade_Terminal():
                 excel_TT, api,
                 request_weekly_symbol_subscription,
                 get_weekly_symbol_quote
+            )
+            # Create/update INDICATOR on the main Excel thread. Excel COM
+            # worksheet operations must use the workbook's owning thread.
+            intraday_indicator_engine.refresh_from_excel(
+                excel_TT, api,
+                request_weekly_symbol_subscription,
+                get_weekly_symbol_quote,
+                lambda symbol: Symbol_Token.get(_extract_symbol(symbol))
             )
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
