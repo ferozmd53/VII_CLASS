@@ -102,6 +102,7 @@ class IndicatorEngine:
         self.pending = {}
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ShoonyaHistory")
         self.last_ltp = {}
+        self.refresh_at = {}
         self.last_result = {}
         self.length_rsi = length_rsi
         self.length_stoch = length_stoch
@@ -255,24 +256,33 @@ class IndicatorEngine:
 
     def _get_history_without_waiting(self, api, exchange, symbol, key):
         frame = self.history.get(key)
-        if frame is not None:
-            return frame
-
         future = self.pending.get(key)
-        if future is None:
-            self._request_history(api, exchange, symbol, key)
-            return None
-        if not future.done():
+
+        if future is not None and future.done():
+            self.pending.pop(key, None)
+            try:
+                refreshed = future.result()
+                if refreshed is not None and not refreshed.empty:
+                    frame = refreshed
+                    self.history[key] = refreshed
+                    self.refresh_at[key] = time.time() + 60
+            except Exception as exc:
+                print(f"Indicator history worker failed for {exchange}:{symbol}: {exc}")
+                self.refresh_at[key] = time.time() + self.retry_seconds
+
+        if frame is None:
+            if future is None:
+                self._request_history(api, exchange, symbol, key)
+                return None
             return None
 
-        self.pending.pop(key, None)
-        try:
-            frame = future.result()
-        except Exception as exc:
-            print(f"Indicator history worker failed for {exchange}:{symbol}: {exc}")
-            frame = None
-        if frame is not None:
-            self.history[key] = frame
+        # Refresh broker daily history periodically so a forming daily candle
+        # is updated from the broker, without substituting local time or LTP.
+        if key not in self.pending and time.time() >= self.refresh_at.get(key, 0):
+            self.refresh_at[key] = time.time() + 60
+            self.pending[key] = self.executor.submit(
+                self._fetch_history, api, exchange, symbol, key
+            )
         return frame
 
     def _calculate(self, closes):
