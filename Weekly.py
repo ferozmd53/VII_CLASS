@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+from Intraday_Indicators import CandleCache
 from Shoonya_Indicators import fetch_bse_sensex_history
 
 
@@ -19,6 +20,8 @@ class WeeklyDataEngine:
     ]
 
     def __init__(self, history_days=60, retry_seconds=300):
+        self.candle_cache = CandleCache()
+        print(f"Weekly candle cache: {self.candle_cache.database_path}")
         self.history_days = int(history_days)
         self.retry_seconds = int(retry_seconds)
         self.history = {}
@@ -105,6 +108,10 @@ class WeeklyDataEngine:
         start_date = (end_date - timedelta(days=self.history_days)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
+        cached = self.candle_cache.load(exchange, symbol, "1d")
+        if cached is not None and not cached.empty:
+            cached_latest = pd.to_datetime(cached["datetime"], errors="coerce").max()
+            start_date = max(start_date, (cached_latest - timedelta(days=2)).to_pydatetime())
         try:
             if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
                 print(
@@ -149,6 +156,8 @@ class WeeklyDataEngine:
                         )
                     except Exception as fallback_exc:
                         print(f"BSE:SENSEX weekly BSE archive fallback failed: {fallback_exc}")
+            if frame is not None and not frame.empty:
+                self.candle_cache.save(exchange, symbol, "1d", frame)
             if frame is None:
                 message = raw.get("emsg") or raw.get("stat") if isinstance(raw, dict) else "no daily candles"
                 print(f"Weekly history unavailable for {exchange}:{symbol}: {message}")
@@ -166,6 +175,15 @@ class WeeklyDataEngine:
 
     def _get_history(self, api, exchange, symbol, key):
         frame = self.history.get(key)
+        if frame is None:
+            try:
+                frame = self.candle_cache.load(exchange, symbol, "1d")
+                if frame is not None and not frame.empty:
+                    frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+                    self.history[key] = frame
+                    print(f"Weekly SQLite daily cache loaded for {exchange}:{symbol}: {len(frame)} candles")
+            except Exception as cache_error:
+                print(f"Weekly SQLite cache read failed for {exchange}:{symbol}: {cache_error}")
         future = self.pending.get(key)
 
         if future is not None and future.done():
@@ -173,8 +191,10 @@ class WeeklyDataEngine:
             try:
                 refreshed = future.result()
                 if refreshed is not None and not refreshed.empty:
-                    frame = refreshed
-                    self.history[key] = refreshed
+                    frame = pd.concat([frame, refreshed], ignore_index=True) if frame is not None else refreshed
+                    frame = frame.sort_values("datetime").drop_duplicates("datetime", keep="last").reset_index(drop=True)
+                    self.candle_cache.save(exchange, symbol, "1d", frame)
+                    self.history[key] = frame
                     self.refresh_at[key] = time.time() + 60
             except Exception as exc:
                 print(f"Weekly history worker error for {exchange}:{symbol}: {exc}")
@@ -246,6 +266,9 @@ class WeeklyDataEngine:
         week_start = latest_week.start_time.date()
         week_end = week_start + timedelta(days=4)
         latest_candle_time = frame["datetime"].iloc[-1]
+        weekly_cache = weekly.reset_index().rename(columns={"week": "datetime"})
+        weekly_cache["datetime"] = pd.to_datetime(weekly_cache["datetime"].astype(str), errors="coerce")
+        self.candle_cache.save(exchange, symbol, "1w", weekly_cache)
         self.latest_rows[key] = [
             exchange, week_start.strftime("%d/%m/%Y"),
             week_end.strftime("%d/%m/%Y"),
