@@ -619,6 +619,8 @@ SOCKET_SESSION_SUBSCRIPTIONS = set()
 SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 SOCKET_SUBSCRIBE_SEND_LOCK = Lock()
 indicator_engine = IndicatorEngine()
+indicator_settings_signature = None
+indicator_settings_last_check = 0.0
 
 # Indicator/history controls are stored on LOGIN!A16:B23.
 INDICATOR_LOGIN_DEFAULTS = [
@@ -632,10 +634,10 @@ INDICATOR_LOGIN_DEFAULTS = [
     ("Stoch Lower", 30),
 ]
 
-def configure_indicator_engine_from_login():
+def configure_indicator_engine_from_login(workbook=None):
     """Read indicator controls from LOGIN; write defaults for blank cells."""
-    global indicator_engine
-    workbook = get_terminal_workbook()
+    global indicator_engine, indicator_settings_signature
+    workbook = workbook or get_terminal_workbook()
     login_sheet = get_login_settings_sheet(workbook)
     values = {}
     for row, (label, default) in enumerate(INDICATOR_LOGIN_DEFAULTS, start=16):
@@ -678,10 +680,46 @@ def configure_indicator_engine_from_login():
         stoch_upper=values["Stoch Upper"],
         stoch_lower=values["Stoch Lower"],
     )
+    indicator_settings_signature = tuple(
+        login_sheet.range(f"B{row}").value
+        for row in range(16, 24)
+    )
     workbook.save()
     print("Indicator settings loaded from LOGIN: " + ", ".join(
         f"{key}={value}" for key, value in values.items()
     ))
+
+
+def reload_indicator_engine_if_settings_changed(workbook):
+    """Hot-reload indicator settings edited in LOGIN without restarting."""
+    global indicator_settings_last_check
+    now = _monotonic()
+    if now - indicator_settings_last_check < 1.0:
+        return False
+    indicator_settings_last_check = now
+
+    try:
+        login_sheet = get_login_settings_sheet(workbook)
+        current_signature = tuple(
+            login_sheet.range(f"B{row}").value
+            for row in range(16, 24)
+        )
+        if current_signature == indicator_settings_signature:
+            return False
+
+        print("LOGIN indicator settings changed; reloading indicator engine and history...")
+        configure_indicator_engine_from_login(workbook)
+
+        # Remove old calculated values immediately. The new engine will refill
+        # them as fresh daily history is loaded using the updated parameters.
+        live_sheet = get_live_trade_sheet(workbook)
+        live_sheet.range("AG4:AN1000").clear_contents()
+        workbook.save()
+        print("Indicator settings applied. Fresh calculations are loading.")
+        return True
+    except Exception as exc:
+        print(f"Could not reload changed indicator settings: {exc}")
+        return False
 
 
 Telegram_Message = ["Welcome to Python Trader excel based trade terminal","Have a Good Day"]
@@ -1852,6 +1890,7 @@ def start_Trade_Terminal():
         try:
             excel_TT = get_terminal_workbook()
             tt = get_live_trade_sheet(excel_TT)
+            reload_indicator_engine_if_settings_changed(excel_TT)
             weekly_data_engine.refresh_from_excel(
                 excel_TT, api,
                 request_weekly_symbol_subscription,
