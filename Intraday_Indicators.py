@@ -5,7 +5,7 @@ latest WebSocket LTP into the currently forming candle. Excel is only touched by
 refresh_from_excel(), which is called by the terminal's main Excel thread.
 
 Pine conversions:
-1) Mirror Upper Band: SMA(high, 5) - 1.7 * population_stdev(high, 5),
+1) Mirror Upper Band: SMA(high, 5) - 0.5 * population_stdev(high, 5),
    mirrored around the current candle open.
 2) ATR Step Channel: highest(ATR(200), 100) * 0.7 channel width, with the
    confirmed-bar step state and live provisional fakeout checks.
@@ -25,7 +25,7 @@ class IntradayIndicatorEngine:
 
     # Pine inputs supplied by the user.
     MIRROR_LENGTH = 5
-    MIRROR_MULTIPLIER = 1.7
+    MIRROR_MULTIPLIER = 0.5
     CHANNEL_WIDTH = 0.7
     CHANNEL_ATR_LENGTH = 200
     CHANNEL_HIGHEST_LENGTH = 100
@@ -41,8 +41,8 @@ class IntradayIndicatorEngine:
     ]
     INPUTS = [
         ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "high",
-         "MIRROR LENGTH", 5, "MIRROR MULT", 1.7, "HISTORY DAYS", 7],
-        ["CHANNEL SOURCE", "high", "ATR LENGTH", 200, "ATR HIGHEST", 100,
+         "MIRROR LENGTH", 5, "MIRROR MULT", 0.5, "HISTORY DAYS", 7],
+        ["CHANNEL SOURCE", "low", "ATR LENGTH", 200, "ATR HIGHEST", 100,
          "CHANNEL MULT", 0.7, "OUTPUT", "OHLCV + upperpink + mirrorUpperBand"],
     ]
 
@@ -142,7 +142,7 @@ class IntradayIndicatorEngine:
                 print(
                     f"Intraday {interval}m history short for {key}: "
                     f"{len(frame)} candles; ATR channel needs about "
-                    f"{self.CHANNEL_INITIAL_BAR + 100} bars for full warm-up."
+                    f"{self.CHANNEL_ATR_LENGTH + self.CHANNEL_HIGHEST_LENGTH - 1} bars for full warm-up."
                 )
             print(
                 f"Intraday {interval}m history loaded for {key}: "
@@ -434,8 +434,8 @@ class IntradayIndicatorEngine:
                 "mirror_source": input_value("D1", "open"),
                 "mirror_sma_source": input_value("F1", "high"),
                 "mirror_length": input_value("H1", 5),
-                "mirror_multiplier": input_value("J1", 1.7),
-                "channel_source": input_value("B2", "high"),
+                "mirror_multiplier": input_value("J1", 0.5),
+                "channel_source": input_value("B2", "low"),
                 "atr_length": input_value("D2", 200),
                 "atr_highest": input_value("F2", 100),
                 "channel_multiplier": input_value("H2", 0.7),
