@@ -55,7 +55,7 @@ The indicator engine reads its settings from the same `LOGIN` sheet. Enter value
 | B22 | Stoch Upper | 70 |
 | B23 | Stoch Lower | 30 |
 
-These settings are loaded when the terminal starts. Historical candles are downloaded in background workers; changing these values takes effect after restarting the terminal. The existing indicator formulas and Excel output columns are unchanged.
+These settings are loaded when the terminal starts and are also monitored while the terminal runs. If you edit any value in `LOGIN!B16:B23`, the indicator engine automatically reloads with the new settings, clears the old indicator output, and downloads fresh history in background workers; restarting the terminal is not required. The existing indicator formulas and Excel output columns are unchanged.
 
 
 ## Live-only trading and alerts
