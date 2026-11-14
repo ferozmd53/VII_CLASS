@@ -11,6 +11,106 @@ Pine conversions:
    confirmed-bar step state and live provisional fakeout checks.
 """
 import time
+
+import sqlite3
+from pathlib import Path
+
+
+class CandleCache:
+    """Shared persistent SQLite OHLCV cache stored on the Windows Desktop."""
+
+    def __init__(self, database_path=None):
+        desktop = Path.home() / "Desktop"
+        desktop.mkdir(parents=True, exist_ok=True)
+        self.database_path = Path(database_path) if database_path else desktop / "market_data_cache.db"
+        self._initialize()
+
+    def _connect(self):
+        connection = sqlite3.connect(str(self.database_path), timeout=30)
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=30000")
+        return connection
+
+    def _initialize(self):
+        with self._connect() as connection:
+            connection.execute("""
+                CREATE TABLE IF NOT EXISTS candles (
+                    exchange TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    candle_time TEXT NOT NULL,
+                    open REAL, high REAL, low REAL, close REAL, volume REAL,
+                    source TEXT NOT NULL DEFAULT 'Shoonya',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (exchange, symbol, timeframe, candle_time)
+                )
+            """)
+            connection.execute("""
+                CREATE INDEX IF NOT EXISTS idx_candles_lookup
+                ON candles(exchange, symbol, timeframe, candle_time)
+            """)
+
+    def save(self, exchange, symbol, timeframe, frame, source="Shoonya"):
+        if frame is None or frame.empty:
+            return 0
+        rows = []
+        for row in frame.itertuples(index=False):
+            values = row._asdict()
+            stamp = pd.Timestamp(values.get("datetime"))
+            if pd.isna(stamp):
+                continue
+            def number(name):
+                value = values.get(name, 0)
+                return None if pd.isna(value) else float(value)
+            rows.append((
+                str(exchange).upper(), str(symbol).upper(), str(timeframe),
+                stamp.strftime("%Y-%m-%d %H:%M:%S"),
+                number("open"), number("high"), number("low"),
+                number("close"), number("volume") or 0.0, source
+            ))
+        if not rows:
+            return 0
+        with self._connect() as connection:
+            connection.executemany("""
+                INSERT INTO candles
+                (exchange,symbol,timeframe,candle_time,open,high,low,close,volume,source,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                ON CONFLICT(exchange,symbol,timeframe,candle_time) DO UPDATE SET
+                    open=excluded.open, high=excluded.high, low=excluded.low,
+                    close=excluded.close, volume=excluded.volume,
+                    source=excluded.source, updated_at=CURRENT_TIMESTAMP
+            """, rows)
+        return len(rows)
+
+    def load(self, exchange, symbol, timeframe, limit=None):
+        query = """
+            SELECT candle_time AS datetime, open, high, low, close, volume
+            FROM candles WHERE exchange=? AND symbol=? AND timeframe=?
+            ORDER BY candle_time
+        """
+        params = [str(exchange).upper(), str(symbol).upper(), str(timeframe)]
+        if limit:
+            query = """
+                SELECT * FROM (
+                    SELECT candle_time AS datetime, open, high, low, close, volume
+                    FROM candles WHERE exchange=? AND symbol=? AND timeframe=?
+                    ORDER BY candle_time DESC LIMIT ?
+                ) ORDER BY datetime
+            """
+            params.append(int(limit))
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        return pd.DataFrame(rows, columns=["datetime", "open", "high", "low", "close", "volume"]) if rows else None
+
+    def latest_time(self, exchange, symbol, timeframe):
+        with self._connect() as connection:
+            row = connection.execute("""
+                SELECT MAX(candle_time) FROM candles
+                WHERE exchange=? AND symbol=? AND timeframe=?
+            """, (str(exchange).upper(), str(symbol).upper(), str(timeframe))).fetchone()
+        return row[0] if row else None
+
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -22,6 +122,7 @@ class IntradayIndicatorEngine:
     HISTORY_DAYS = 7
     RETRY_SECONDS = 60
     REFRESH_SECONDS = 1.0
+    HISTORY_REFRESH_SECONDS = 60
 
     # Pine inputs supplied by the user.
     MIRROR_LENGTH = 5
@@ -47,6 +148,9 @@ class IntradayIndicatorEngine:
     ]
 
     def __init__(self):
+        self.candle_cache = CandleCache()
+        print(f"SQLite candle cache: {self.candle_cache.database_path}")
+        self.refresh_at = {}
         self.executor = ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="ShoonyaIntradayHistory"
         )
@@ -121,9 +225,9 @@ class IntradayIndicatorEngine:
         frame = frame.sort_values("datetime").drop_duplicates("datetime")
         return frame.reset_index(drop=True) if not frame.empty else None
 
-    def _fetch_history(self, api, exchange, token, interval, key, history_days):
+    def _fetch_history(self, api, exchange, token, interval, key, history_days, start_timestamp=None):
         now = datetime.now()
-        start = now - timedelta(days=history_days)
+        start = datetime.fromtimestamp(start_timestamp) if start_timestamp else now - timedelta(days=history_days)
         try:
             # Shoonya API signature: get_time_price_series(exchange, token,
             # starttime, endtime, interval). Keep this REST call off Excel/tick loops.
@@ -148,6 +252,8 @@ class IntradayIndicatorEngine:
                 f"Intraday {interval}m history loaded for {key}: "
                 f"{len(frame)} candles (requested {history_days} days)"
             )
+            cache_symbol = key.split('|', 1)[0]
+            self.candle_cache.save(exchange, cache_symbol, f'{interval}m', frame)
             return frame
         except Exception as exc:
             print(f"Intraday {interval}m history request failed for {key}: {exc}")
@@ -155,30 +261,48 @@ class IntradayIndicatorEngine:
 
     def _get_history(self, api, exchange, token, interval, key, history_days):
         cache_key = (key, interval, int(history_days))
-        if cache_key in self.history:
-            return self.history[cache_key]
-
+        cache_symbol = key.split("|", 1)[0]
+        frame = self.history.get(cache_key)
         future = self.pending.get(cache_key)
-        if future is None:
-            if time.time() >= self.retry_at.get(cache_key, 0):
+
+        if frame is None:
+            frame = self.candle_cache.load(exchange, cache_symbol, f"{interval}m")
+            if frame is not None and not frame.empty:
+                frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+                self.history[cache_key] = frame
+                print(f"Intraday {interval}m cache loaded for {cache_symbol}: {len(frame)} candles")
+
+        if future is not None and future.done():
+            self.pending.pop(cache_key, None)
+            try:
+                refreshed = future.result()
+                if refreshed is not None and not refreshed.empty:
+                    frame = pd.concat([frame, refreshed], ignore_index=True) if frame is not None else refreshed
+                    frame = frame.sort_values("datetime").drop_duplicates("datetime", keep="last").reset_index(drop=True)
+                    self.candle_cache.save(exchange, cache_symbol, f"{interval}m", frame)
+                    self.history[cache_key] = frame
+                    self.refresh_at[cache_key] = time.time() + self.HISTORY_REFRESH_SECONDS
+            except Exception as exc:
+                print(f"Intraday history worker error for {key} ({interval}m): {exc}")
+                self.refresh_at[cache_key] = time.time() + self.RETRY_SECONDS
+
+        if frame is None:
+            if future is None and time.time() >= self.retry_at.get(cache_key, 0):
                 self.pending[cache_key] = self.executor.submit(
                     self._fetch_history, api, exchange, token, interval, key,
-                    int(history_days)
+                    int(history_days), None
                 )
             return None
-        if not future.done():
-            return None
 
-        self.pending.pop(cache_key, None)
-        try:
-            frame = future.result()
-        except Exception as exc:
-            print(f"Intraday history worker error for {key} ({interval}m): {exc}")
-            frame = None
-        if frame is None:
-            self.retry_at[cache_key] = time.time() + self.RETRY_SECONDS
-            return None
         self.history[cache_key] = frame
+        if cache_key not in self.pending and time.time() >= self.refresh_at.get(cache_key, 0):
+            latest = pd.to_datetime(frame["datetime"], errors="coerce").max()
+            start_timestamp = max(0, int((latest - pd.Timedelta(minutes=2 * interval)).timestamp()))
+            self.pending[cache_key] = self.executor.submit(
+                self._fetch_history, api, exchange, token, interval, key,
+                int(history_days), start_timestamp
+            )
+            self.refresh_at[cache_key] = time.time() + self.HISTORY_REFRESH_SECONDS
         return frame
 
     @staticmethod
