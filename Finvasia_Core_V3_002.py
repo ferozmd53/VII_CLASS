@@ -1366,7 +1366,7 @@ def register_side_order_display(symbol, side, order_id, display_row=None):
         id_col, status_col = ("R", "S") if side == "BUY" else ("X", "Y")
         sheet.range(f"{id_col}{row_number}").number_format = "@"
         sheet.range(f"{id_col}{row_number}").value = str(order_id)
-        sheet.range(f"{status_col}{row_number}").value = "SUBMITTED"
+        sheet.range(f"{status_col}{row_number}").value = None
         with SIDE_ORDER_TRACKER_LOCK:
             SIDE_ORDER_TRACKER[str(order_id)] = {
                 "row": row_number, "side": side, "symbol": str(symbol),
@@ -1463,7 +1463,6 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             pythoncom = None
         sheet = get_live_trade_sheet(get_terminal_workbook())
         id_col, status_col = ("R", "S") if side == "BUY" else ("X", "Y")
-        sheet.range(f"{status_col}{row_number}").value = "SUBMITTING"
         quantity_value = _required_positive_number(qty, "Quantity")
         if not quantity_value.is_integer():
             raise ValueError("Quantity must be a whole number")
@@ -1568,7 +1567,7 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
         if state.get("armed"):
             return
         sheet.range(f"{id_col}{row_number}").value = None
-        sheet.range(f"{status_col}{row_number}").value = "QUEUED"
+        sheet.range(f"{status_col}{row_number}").value = None
         sheet.range(f"{price_col}{row_number}").value = None
         SIDE_TRIGGER_STATE[key] = {"armed": True, "queued": True}
     try:
