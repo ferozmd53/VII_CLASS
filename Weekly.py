@@ -266,8 +266,8 @@ class WeeklyDataEngine:
         week_start = latest_week.start_time.date()
         week_end = week_start + timedelta(days=4)
         latest_candle_time = frame["datetime"].iloc[-1]
-        weekly_cache = weekly.reset_index().rename(columns={"week": "datetime"})
-        weekly_cache["datetime"] = pd.to_datetime(weekly_cache["datetime"].astype(str), errors="coerce")
+        weekly_cache = weekly.reset_index(drop=True)
+        weekly_cache["datetime"] = [period.start_time for period in weekly.index]
         self.candle_cache.save(exchange, symbol, "1w", weekly_cache)
         self.latest_rows[key] = [
             exchange, week_start.strftime("%d/%m/%Y"),
