@@ -1131,6 +1131,10 @@ def GetToken_UsingSymbol(exchange, tradingsymbol):
     tradingsymbol = str(tradingsymbol or "").strip().upper()
     if not exchange or not tradingsymbol:
         raise ValueError("Exchange and trading symbol are required to resolve an instrument token.")
+    # Excel-friendly alias for the Shoonya Nifty 50 spot index.
+    # The live-feed token is NSE|26000; Shoonya's instrument name is "Nifty 50".
+    if exchange == "NSE" and tradingsymbol == "NIFTY INDEX":
+        return Token_list["NIFTY"]
     if exchange == "BSE" and tradingsymbol in IndexList:
         return Token_list[tradingsymbol]
     master_by_exchange = {
