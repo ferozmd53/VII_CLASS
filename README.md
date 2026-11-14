@@ -90,6 +90,16 @@ The old BUY/SELL dropdown is removed. Enter `BUY` in column N or `SELL` in colum
 
 The  main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AG:AN`, using daily historical candles and the same indicator formulas. Daily history and indicator calculations are enabled for symbols from NSE, NFO, BSE, BFO, CDS and MCX, provided the symbol is present in `LIVE_TRADE`, resolves to a valid Shoonya instrument token, and Shoonya returns historical candles for it. History downloads run in background workers so the live quote loop is not held up. Derivative contracts may have shorter available history or no candles after expiry; the engine reports unavailable/short history in the console instead of fabricating values.
 
+## Separate live 1-minute / 5-minute indicator sheet
+
+A separate `Intraday_Indicators.py` module creates the `INDICATOR` worksheet without changing the existing daily indicators or trading/order columns. Enter symbols in `INDICATOR!A4:A1000` using `EXCHANGE:TRADINGSYMBOL` format; the initial list is copied from `LIVE_TRADE`.
+
+The sheet displays the converted Pine indicators for both 1-minute and 5-minute candles:
+- Mirror Upper Band: length 5, multiplier 1.7, source High, reference Open.
+- ATR Step Channel: width 0.7, ATR length 200, highest ATR lookback 100, source High, with fakeout-up/down flags.
+
+Shoonya intraday history is requested asynchronously. The current forming candle is updated from the latest WebSocket LTP, and the Excel sheet refreshes about once per second. The ATR channel needs a warm-up of approximately 300 candles; values remain blank until enough valid history is available. Fakeout flags are provisional while the candle is forming and can change before candle close. This indicator module does not place or modify orders.
+
 ## Start
 
 ```bat
