@@ -661,6 +661,10 @@ def configure_indicator_engine_from_login():
     if values["Stoch Lower"] >= values["Stoch Upper"]:
         values["Stoch Lower"], values["Stoch Upper"] = 30, 70
 
+    # Show the effective (validated) values back in Excel.
+    for row, (label, _default) in enumerate(INDICATOR_LOGIN_DEFAULTS, start=16):
+        login_sheet.range(f"B{row}").value = values[label]
+
     indicator_engine = IndicatorEngine(
         load_days=values["Historical Days"],
         length_rsi=values["RSI Length"],
