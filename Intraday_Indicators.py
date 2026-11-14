@@ -41,7 +41,7 @@ class IntradayIndicatorEngine:
     ]
     INPUTS = [
         ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "high",
-         "MIRROR LENGTH", 5, "MIRROR MULT", 1.7],
+         "MIRROR LENGTH", 5, "MIRROR MULT", 1.7, "HISTORY DAYS", 7],
         ["CHANNEL SOURCE", "high", "ATR LENGTH", 200, "ATR HIGHEST", 100,
          "CHANNEL MULT", 0.7, "OUTPUT", "OHLCV + upperpink + mirrorUpperBand"],
     ]
@@ -123,9 +123,9 @@ class IntradayIndicatorEngine:
         frame = frame.sort_values("datetime").drop_duplicates("datetime")
         return frame.reset_index(drop=True) if not frame.empty else None
 
-    def _fetch_history(self, api, exchange, token, interval, key):
+    def _fetch_history(self, api, exchange, token, interval, key, history_days):
         now = datetime.now()
-        start = now - timedelta(days=self.HISTORY_DAYS)
+        start = now - timedelta(days=history_days)
         try:
             # Shoonya API signature: get_time_price_series(exchange, token,
             # starttime, endtime, interval). Keep this REST call off Excel/tick loops.
@@ -148,15 +148,15 @@ class IntradayIndicatorEngine:
                 )
             print(
                 f"Intraday {interval}m history loaded for {key}: "
-                f"{len(frame)} candles"
+                f"{len(frame)} candles (requested {history_days} days)"
             )
             return frame
         except Exception as exc:
             print(f"Intraday {interval}m history request failed for {key}: {exc}")
             return None
 
-    def _get_history(self, api, exchange, token, interval, key):
-        cache_key = (key, interval)
+    def _get_history(self, api, exchange, token, interval, key, history_days):
+        cache_key = (key, interval, int(history_days))
         if cache_key in self.history:
             return self.history[cache_key]
 
@@ -164,7 +164,8 @@ class IntradayIndicatorEngine:
         if future is None:
             if time.time() >= self.retry_at.get(cache_key, 0):
                 self.pending[cache_key] = self.executor.submit(
-                    self._fetch_history, api, exchange, token, interval, key
+                    self._fetch_history, api, exchange, token, interval, key,
+                    int(history_days)
                 )
             return None
         if not future.done():
@@ -311,7 +312,10 @@ class IntradayIndicatorEngine:
         results = {}
         for interval in self.SUPPORTED_INTERVALS:
             key = f"{symbol}|{token}"
-            history = self._get_history(api, exchange, token, interval, key)
+            history = self._get_history(
+                api, exchange, token, interval, key,
+                (settings or {}).get("history_days", self.HISTORY_DAYS)
+            )
             if history is None:
                 results[interval] = (None, None, None)
                 continue
@@ -387,18 +391,18 @@ class IntradayIndicatorEngine:
             if is_new or not self.sheet_ready:
                 # Populate editable input controls only when blank, preserving user settings.
                 for row_number, defaults in enumerate(self.INPUTS, start=1):
-                    existing = sheet.range(f"A{row_number}:J{row_number}").value
+                    existing = sheet.range(f"A{row_number}:L{row_number}").value
                     existing = existing if isinstance(existing, list) else [existing]
-                    existing = (existing + [None] * 10)[:10]
+                    existing = (existing + [None] * 12)[:12]
                     for col_number, default_value in enumerate(defaults, start=1):
                         if existing[col_number - 1] in (None, ""):
                             sheet.range((row_number, col_number)).value = default_value
                 sheet.range("A3:P3").value = [self.HEADERS]
                 # Remove obsolete indicator columns from the previous INTRADAY layout.
                 sheet.range("Q3:Z1000").clear_contents()
-                sheet.range("A1:J2").api.Font.Bold = True
+                sheet.range("A1:L2").api.Font.Bold = True
                 sheet.range("A3:P3").api.Font.Bold = True
-                sheet.range("A1:J3").api.WrapText = True
+                sheet.range("A1:L3").api.WrapText = True
                 self.sheet_ready = True
                 try:
                     workbook.save()
@@ -419,6 +423,7 @@ class IntradayIndicatorEngine:
                 "atr_length": input_value("D2", 200),
                 "atr_highest": input_value("F2", 100),
                 "channel_multiplier": input_value("H2", 0.7),
+                "history_days": max(1, int(float(input_value("L1", self.HISTORY_DAYS)))),
             }
 
             symbols = sheet.range("A4:A1000").value or []
