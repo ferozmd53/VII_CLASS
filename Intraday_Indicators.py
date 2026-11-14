@@ -149,10 +149,9 @@ class IntradayIndicatorEngine:
         "1m Candle Time", "1m Open", "1m High", "1m Low", "1m Close", "1m Volume",
         "1m upperpink", "1m mirrorUpperBand",
         "5m Candle Time", "5m Open", "5m High", "5m Low", "5m Close", "5m Volume",
-        "5m upperpink", "5m upperpink (2nd-last)",
-        "5m upperpink (2nd-last)", "5m mirrorUpperBand",
-        "1m mirrorUpperBand (2nd-last)", "5m mirrorUpperBand (2nd-last)",
-        "LTP",
+        "5m upperpink", "5m upperpink (2nd-last)", "5m upperpink (2nd-last)",
+        "5m mirrorUpperBand", "1m mirrorUpperBand (2nd-last)",
+        "5m mirrorUpperBand (2nd-last)", "LTP",
     ]
     INPUTS = [
         ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "low",
@@ -613,11 +612,11 @@ class IntradayIndicatorEngine:
                 if sheet.range("M1").value in (None, ""):
                     sheet.range("M1").value = "CHECK CANDLE TIME"
                 sheet.range("N1").api.NumberFormat = "dd/mm/yyyy hh:mm"
-                sheet.range("A3:W3").value = [self.HEADERS]
-                sheet.range("X3:Z1000").clear_contents()
+                sheet.range("A3:V3").value = [self.HEADERS]
+                sheet.range("W3:W1000").clear_contents()
                 sheet.range("A1:N2").api.Font.Bold = True
                 sheet.range("A3:W3").api.Font.Bold = True
-                sheet.range("A1:W3").api.WrapText = True
+                sheet.range("A1:V3").api.WrapText = True
                 sheet.range("B4:B1000").api.NumberFormat = "dd-mm-yyyy hh:mm"
                 sheet.range("J4:J1000").api.NumberFormat = "dd-mm-yyyy hh:mm"
                 self.sheet_ready = True
@@ -669,7 +668,7 @@ class IntradayIndicatorEngine:
                 token_key = token_callback(symbol)
                 ltp = self._number(quote.get("lp")) if isinstance(quote, dict) else None
                 if not token_key or not isinstance(quote, dict):
-                    output.append([symbol] + [None] * 22)
+                    output.append([symbol] + [None] * (len(self.HEADERS) - 1))
                     continue
 
                 one_minute, five_minute, status = self.update_symbol(
@@ -683,19 +682,29 @@ class IntradayIndicatorEngine:
 
                 one_previous = one_minute[4:6] if one_minute and len(one_minute) == 6 else [None, None]
                 five_previous = five_minute[4:6] if five_minute and len(five_minute) == 6 else [None, None]
+                five_candle_values = (
+                    [five_minute[0]] + list(five_minute[1])
+                    if five_minute and len(five_minute) == 6 and five_minute[1] is not None
+                    else [None] * 6
+                )
                 output.append(
                     [symbol]
                     + timeframe_values(one_minute)
-                    + timeframe_values(five_minute)
-                    + [five_previous[0], one_previous[0],
-                       five_minute[3] if five_minute and len(five_minute) == 6 else None,
-                       one_previous[1], five_previous[1]]
-                    + [ltp]
+                    + five_candle_values
+                    + [
+                        five_minute[2] if five_minute and len(five_minute) == 6 else None,
+                        five_previous[0],
+                        one_previous[0],
+                        five_minute[3] if five_minute and len(five_minute) == 6 else None,
+                        one_previous[1],
+                        five_previous[1],
+                        ltp,
+                    ]
                 )
 
-            sheet.range(f"A4:W{last_row}").value = output
+            sheet.range(f"A4:V{last_row}").value = output
             if self.last_written_row > last_row:
-                sheet.range(f"A{last_row + 1}:W{self.last_written_row}").clear_contents()
+                sheet.range(f"A{last_row + 1}:V{self.last_written_row}").clear_contents()
             self.last_written_row = last_row
         except Exception as exc:
             print(f"INTRADAY sheet refresh failed: {exc}")
