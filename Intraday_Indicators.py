@@ -297,8 +297,9 @@ class IntradayIndicatorEngine:
         current = len(frame) - 1
         mirror_value = mirror_upper.iloc[current]
         mirror_value = round(float(mirror_value), 4) if pd.notna(mirror_value) else None
-        upperpink = step_values[current]
-        upperpink = round(float(upperpink), 4) if upperpink > 0 else None
+        # upperpink is the upper ATR-step band (st[1] + ATR width).
+        upperpink = upper_values[current]
+        upperpink = round(float(upperpink), 4) if pd.notna(upperpink) and upperpink > 0 else None
         return upperpink, mirror_value
 
     def update_symbol(self, api, symbol, token_key, quote, settings=None):
