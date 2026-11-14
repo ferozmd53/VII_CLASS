@@ -164,9 +164,8 @@ class IndicatorEngine:
             if isinstance(raw, dict):
                 message = raw.get("emsg") or raw.get("stat") or str(raw)
                 print(f"Daily indicator history rejected for {exchange}:{symbol}: {message}")
-                self.retry_at[key] = now + self.retry_seconds
-                return None
-            if not rows:
+                frame = None
+            elif not rows:
                 print(f"Daily indicator history returned no candles for {exchange}:{symbol}")
                 frame = None
             else:
