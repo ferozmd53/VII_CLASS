@@ -88,7 +88,7 @@ The old BUY/SELL dropdown is removed. Enter `BUY` in column N or `SELL` in colum
 
 ## Indicators
 
-The  main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AG:AN`, using daily historical candles and the same indicator formulas. Daily history and indicator calculations are enabled for symbols from NSE, NFO, BSE, BFO, CDS and MCX, provided the symbol is present in `LIVE_TRADE`, resolves to a valid Shoonya instrument token, and Shoonya returns historical candles for it. History downloads run in background workers so the live quote loop is not held up. Derivative contracts may have shorter available history or no candles after expiry; the engine reports unavailable/short history in the console instead of fabricating values.
+RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AG:AN`, using Shoonya daily historical candles and the same indicator formulas. Daily history is refreshed in background workers about once per minute so a broker-published forming daily candle can update without blocking the live quote loop. The indicator engine never replaces a broker daily close with WebSocket LTP and never fabricates a daily candle from the PC date. Daily calculations are enabled for NSE, NFO, BSE, BFO, CDS and MCX symbols when Shoonya returns valid history. Derivative contracts may have shorter available history or no candles after expiry; the engine reports unavailable/short history instead of fabricating values.
 
 ## Separate live 1-minute / 5-minute indicator sheet
 
@@ -121,7 +121,7 @@ The original Finvasia source attribution and license are retained in this reposi
 
 The separate `Weekly.py` module creates a `WEEKLY_DATA` worksheet automatically. It loads recent daily candles in background workers and combines the available broker daily candles into weekly OHLCV. It does not overwrite broker candles with WebSocket LTP or create a candle from the PC date; the newest available broker candle determines the week shown.
 
-Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. The Volume value is the sum of daily volumes returned in the broker history for the displayed week. This sheet is a current-week summary for the symbols selected in `WEEKLY_DATA!A4:A1000`; it does not place or modify orders.
+Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. Broker daily history is refreshed in background workers about once per minute. Weekly OHLCV is calculated only from the available broker daily candles; it is not overwritten with LTP or a locally generated candle. The Volume value is the sum of daily volumes returned in the broker history for the displayed week. This sheet is a current-week summary for the symbols selected in `WEEKLY_DATA!A4:A1000`; it does not place or modify orders.
 
 
 ### Weekly symbol selection and row layout
