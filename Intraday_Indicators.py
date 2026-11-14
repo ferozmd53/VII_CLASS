@@ -281,7 +281,7 @@ class IntradayIndicatorEngine:
         current = len(frame) - 1
         previous = current - 1
         if previous < 0:
-            return [None] * 10
+            return [None] * 11
 
         current_high = float(high.iloc[current])
         previous_high = float(high.iloc[previous])
