@@ -14,6 +14,7 @@ import time
 
 import sqlite3
 from pathlib import Path
+from contextlib import contextmanager
 
 
 class CandleCache:
@@ -31,8 +32,17 @@ class CandleCache:
         connection.execute("PRAGMA busy_timeout=30000")
         return connection
 
+    @contextmanager
+    def _connection(self):
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        finally:
+            connection.close()
+
     def _initialize(self):
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("""
                 CREATE TABLE IF NOT EXISTS candles (
                     exchange TEXT NOT NULL,
@@ -70,7 +80,7 @@ class CandleCache:
             ))
         if not rows:
             return 0
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executemany("""
                 INSERT INTO candles
                 (exchange,symbol,timeframe,candle_time,open,high,low,close,volume,source,updated_at)
