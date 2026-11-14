@@ -10,7 +10,7 @@ Open Command Prompt and run these commands one by one:
 
 ```bat
 pip uninstall VII_CLASS -y
-pip install --no-cache-dir --upgrade git+https://github.com/ferozmd53/VII_CLASS.git@271234a
+pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.git
 ```
 
 If you use Python 3.13 installed at `C:\Python313`, use:
@@ -89,6 +89,14 @@ The old BUY/SELL dropdown is removed. Enter `BUY` in column N or `SELL` in colum
 ## Indicators
 
 The  main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AG:AN`, using daily historical candles and the same indicator formulas. Daily history and indicator calculations are enabled for symbols from NSE, NFO, BSE, BFO, CDS and MCX, provided the symbol is present in `LIVE_TRADE`, resolves to a valid Shoonya instrument token, and Shoonya returns historical candles for it. History downloads run in background workers so the live quote loop is not held up. Derivative contracts may have shorter available history or no candles after expiry; the engine reports unavailable/short history in the console instead of fabricating values.
+
+## Separate live 1-minute / 5-minute indicator sheet
+
+The `Intraday_Indicators.py` module creates a separate `INTRADAY` worksheet without changing the existing daily indicators or trading/order columns. Symbols are copied from `LIVE_TRADE` when the new sheet is blank; you can also enter symbols in `INTRADAY!A4:A1000` using `EXCHANGE:TRADINGSYMBOL` format.
+
+The sheet displays 1-minute and 5-minute OHLCV, `upperpink`, and `mirrorUpperBand`. Indicator settings and the number of history days are editable in rows 1 and 2. Enter a full historical candle date and time in `INTRADAY!N1` using `dd-mm-yyyy hh:mm` format (example: `14-11-2026 10:15`) to inspect that candle; clear `N1` to return to live values. Separate 1m and 5m candle timestamps are displayed beside their OHLCV and indicator values.
+
+History downloads run asynchronously and the live sheet refreshes about once per second. The ATR channel needs sufficient warm-up history; values remain blank until enough valid candles are available. This module does not place or modify orders.
 
 ## Start
 
