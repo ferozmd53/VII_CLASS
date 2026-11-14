@@ -15,7 +15,11 @@ import pandas as pd
 
 
 class IndicatorEngine:
-    def __init__(self, load_days=500, retry_seconds=300):
+    def __init__(
+        self, load_days=500, retry_seconds=300, length_rsi=14,
+        length_stoch=14, length_sma_stoch=3, length_bb=20,
+        bb_std=2.0, stoch_upper=70, stoch_lower=30
+    ):
         self.load_days = load_days
         self.retry_seconds = retry_seconds
         self.history = {}
@@ -24,12 +28,13 @@ class IndicatorEngine:
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ShoonyaHistory")
         self.last_ltp = {}
         self.last_result = {}
-        self.length_rsi = 14
-        self.length_stoch = 14
-        self.length_bb = 20
-        self.bb_std = 2.0
-        self.stoch_upper = 70
-        self.stoch_lower = 30
+        self.length_rsi = length_rsi
+        self.length_stoch = length_stoch
+        self.length_sma_stoch = length_sma_stoch
+        self.length_bb = length_bb
+        self.bb_std = bb_std
+        self.stoch_upper = stoch_upper
+        self.stoch_lower = stoch_lower
 
     @staticmethod
     def _empty():
@@ -126,7 +131,7 @@ class IndicatorEngine:
         lowest = rsi.rolling(self.length_stoch).min()
         highest = rsi.rolling(self.length_stoch).max()
         stoch = (100 * (rsi - lowest) / (highest - lowest)).fillna(50.0)
-        sma_stoch = stoch.rolling(3).mean().fillna(50.0)
+        sma_stoch = stoch.rolling(self.length_sma_stoch).mean().fillna(50.0)
 
         middle = close.rolling(self.length_bb).mean()
         deviation = close.rolling(self.length_bb).std(ddof=0)
