@@ -150,7 +150,7 @@ class IntradayIndicatorEngine:
         "1m upperpink", "1m mirrorUpperBand",
         "5m Candle Time", "5m Open", "5m High", "5m Low", "5m Close", "5m Volume",
         "5m upperpink", "5m upperpink (2nd-last)",
-        "1m upperpink (2nd-last)", "5m mirrorUpperBand",
+        "5m upperpink (2nd-last)", "5m mirrorUpperBand",
         "1m mirrorUpperBand (2nd-last)", "5m mirrorUpperBand (2nd-last)",
         "LTP",
     ]
@@ -613,11 +613,11 @@ class IntradayIndicatorEngine:
                 if sheet.range("M1").value in (None, ""):
                     sheet.range("M1").value = "CHECK CANDLE TIME"
                 sheet.range("N1").api.NumberFormat = "dd/mm/yyyy hh:mm"
-                sheet.range("A3:V3").value = [self.HEADERS]
-                sheet.range("W3:Z1000").clear_contents()
+                sheet.range("A3:W3").value = [self.HEADERS]
+                sheet.range("X3:Z1000").clear_contents()
                 sheet.range("A1:N2").api.Font.Bold = True
-                sheet.range("A3:V3").api.Font.Bold = True
-                sheet.range("A1:V3").api.WrapText = True
+                sheet.range("A3:W3").api.Font.Bold = True
+                sheet.range("A1:W3").api.WrapText = True
                 sheet.range("B4:B1000").api.NumberFormat = "dd-mm-yyyy hh:mm"
                 sheet.range("J4:J1000").api.NumberFormat = "dd-mm-yyyy hh:mm"
                 self.sheet_ready = True
@@ -653,7 +653,7 @@ class IntradayIndicatorEngine:
             last_row = 4 + last_index
             if last_index < 0:
                 if self.last_written_row > 3:
-                    sheet.range(f"A4:V{self.last_written_row}").clear_contents()
+                    sheet.range(f"A4:W{self.last_written_row}").clear_contents()
                     self.last_written_row = 3
                 return
 
@@ -669,7 +669,7 @@ class IntradayIndicatorEngine:
                 token_key = token_callback(symbol)
                 ltp = self._number(quote.get("lp")) if isinstance(quote, dict) else None
                 if not token_key or not isinstance(quote, dict):
-                    output.append([symbol] + [None] * 21)
+                    output.append([symbol] + [None] * 22)
                     continue
 
                 one_minute, five_minute, status = self.update_symbol(
@@ -693,9 +693,9 @@ class IntradayIndicatorEngine:
                     + [ltp]
                 )
 
-            sheet.range(f"A4:V{last_row}").value = output
+            sheet.range(f"A4:W{last_row}").value = output
             if self.last_written_row > last_row:
-                sheet.range(f"A{last_row + 1}:V{self.last_written_row}").clear_contents()
+                sheet.range(f"A{last_row + 1}:W{self.last_written_row}").clear_contents()
             self.last_written_row = last_row
         except Exception as exc:
             print(f"INTRADAY sheet refresh failed: {exc}")
