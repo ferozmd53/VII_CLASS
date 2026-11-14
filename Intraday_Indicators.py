@@ -635,6 +635,7 @@ class IntradayIndicatorEngine:
                 subscribe_callback(symbol)
                 quote = quote_callback(symbol)
                 token_key = token_callback(symbol)
+                ltp = self._number(quote.get("lp")) if isinstance(quote, dict) else None
                 if not token_key or not isinstance(quote, dict):
                     output.append([symbol] + [None] * 16 + ["WAITING FOR SUBSCRIPTION"] + [None] * 5)
                     continue
