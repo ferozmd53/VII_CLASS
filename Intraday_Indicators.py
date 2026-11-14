@@ -354,19 +354,18 @@ class IntradayIndicatorEngine:
         return results.get(1), results.get(5), status
 
     def _get_or_create_sheet(self, workbook):
+        """Return the INDICATOR sheet, creating it and seeding symbols if needed."""
         names = [sheet.name for sheet in workbook.sheets]
-        if "INDICATOR" in names:
-            return workbook.sheets["INDICATOR"], False
-        sheet = workbook.sheets.add("INDICATOR")
-        print("Created INDICATOR sheet for live 1-minute and 5-minute indicators.")
+        is_new = "INDICATOR" not in names
+
+        if is_new:
+            sheet = workbook.sheets.add("INDICATOR")
+            print("Created INDICATOR sheet for live 1-minute and 5-minute indicators.")
+        else:
+            sheet = workbook.sheets["INDICATOR"]
+
+        # Seed symbols both on first creation and when an existing sheet is blank.
         try:
-            workbook.save()
-            print("INDICATOR worksheet saved in the active VII_CLASS workbook.")
-        except Exception as save_error:
-            print(f"INDICATOR worksheet created but workbook save failed: {save_error}")
-        try:
-            # Seed symbols whenever INDICATOR is empty, including a sheet that
-            # was created manually or left blank during an earlier startup.
             current_symbols = sheet.range("A4:A1000").value or []
             has_symbols = any(str(value or "").strip() for value in current_symbols)
             if not has_symbols:
@@ -376,14 +375,17 @@ class IntradayIndicatorEngine:
                     None,
                 )
                 if source is not None:
-                    source_symbols = source.range("A4:A1000").value
-                    if any(str(value or "").strip() for value in (source_symbols or [])):
+                    source_symbols = source.range("A4:A1000").value or []
+                    if any(str(value or "").strip() for value in source_symbols):
                         sheet.range("A4:A1000").value = source_symbols
-                        print("Copied symbols from LIVE_TRADE into INDICATOR!A4:A1000.")
+                        print("Copied symbols from the live trade sheet into INDICATOR!A4:A1000.")
                     else:
-                        print("INDICATOR created; add EXCHANGE:TRADINGSYMBOL values in column A.")
+                        print("INDICATOR sheet is ready; no symbols found in the live trade sheet.")
+                else:
+                    print("INDICATOR sheet is ready; add EXCHANGE:TRADINGSYMBOL values in column A.")
         except Exception as exc:
-            print(f"Could not seed INDICATOR symbols from LIVE_TRADE: {exc}")
+            print(f"Could not seed INDICATOR symbols from the live trade sheet: {exc}")
+
         return sheet, is_new
 
     def refresh_from_excel(
@@ -401,6 +403,11 @@ class IntradayIndicatorEngine:
                 sheet.range("A3:Z3").api.Font.Bold = True
                 sheet.range("A3:Z3").api.WrapText = True
                 self.sheet_ready = True
+                try:
+                    workbook.save()
+                    print("INDICATOR sheet headers and symbol list saved to the active workbook.")
+                except Exception as save_error:
+                    print(f"INDICATOR sheet save failed: {save_error}")
 
             symbols = sheet.range("A4:A1000").value or []
             last_index = max(
