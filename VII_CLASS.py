@@ -22,8 +22,10 @@ from Shoonya_OAuth import login_with_excel
 from get_auth import get_auth_code
 from Shoonya_Indicators import IndicatorEngine
 from Weekly import WeeklyDataEngine
+from Intraday_Indicators import IntradayIndicatorEngine
 
 weekly_data_engine = WeeklyDataEngine()
+intraday_indicator_engine = IntradayIndicatorEngine()
 #import Noren
 import os
 import time
@@ -1902,6 +1904,7 @@ def start_Trade_Terminal():
                                 ]
                         market_rows.append(values)
                     market_sheet.range("B4:L1000").value = market_rows
+
                 except Exception as market_error:
                     if not is_excel_connection_lost():
                         print(f"Live market-data refresh error (order workers continue): {market_error}")
@@ -1916,6 +1919,34 @@ def start_Trade_Terminal():
                 pass
 
     Thread(target=write_live_market_data, daemon=True, name="LiveMarketDataWriter").start()
+
+    def write_intraday_indicator_data():
+        """Dedicated Excel/COM worker for the separate 1m and 5m indicator sheet."""
+        try:
+            ensure_excel_com_initialized()
+            print("Separate 1-minute / 5-minute indicator worker started.")
+            while True:
+                try:
+                    indicator_workbook = get_terminal_workbook()
+                    intraday_indicator_engine.refresh_from_excel(
+                        indicator_workbook,
+                        api,
+                        request_weekly_symbol_subscription,
+                        get_weekly_symbol_quote,
+                        lambda symbol: Symbol_Token.get(_extract_symbol(symbol)),
+                    )
+                except Exception as indicator_error:
+                    if not is_excel_connection_lost():
+                        print(f"Intraday indicator worker error: {indicator_error}")
+                sleep(0.25)
+        except Exception as worker_error:
+            print(f"Intraday indicator worker stopped: {worker_error}")
+
+    Thread(
+        target=write_intraday_indicator_data,
+        daemon=True,
+        name="IntradayIndicatorWriter",
+    ).start()
 
     global LimitOrderBook
     while True:
