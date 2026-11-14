@@ -9,6 +9,7 @@ setup(
         "Shoonya_OAuth",
         "Shoonya_Indicators",
         "Weekly",
+        "Intraday_Indicators",
         "get_auth",
     ],
     include_package_data=True,
