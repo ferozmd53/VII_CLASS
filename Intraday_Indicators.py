@@ -393,6 +393,8 @@ class IntradayIndicatorEngine:
                         if existing[col_number - 1] in (None, ""):
                             sheet.range((row_number, col_number)).value = default_value
                 sheet.range("A3:P3").value = [self.HEADERS]
+                # Remove obsolete indicator columns from the previous INTRADAY layout.
+                sheet.range("Q3:Z1000").clear_contents()
                 sheet.range("A1:J2").api.Font.Bold = True
                 sheet.range("A3:P3").api.Font.Bold = True
                 sheet.range("A1:J3").api.WrapText = True
