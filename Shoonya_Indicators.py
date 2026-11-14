@@ -46,7 +46,19 @@ class IndicatorEngine:
         now = time.time()
         try:
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=self.load_days)
+            # Shoonya's BSE:SENSEX daily-history request is reliable over the
+            # same 60-day window used by the working WEEKLY_DATA engine. A
+            # 1000-day request can fail for this index even while 60-day history
+            # is available. Keep the user's configured history range unchanged
+            # for every other instrument.
+            history_days = (
+                min(self.load_days, 60)
+                if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX"
+                else self.load_days
+            )
+            start_date = end_date - timedelta(days=history_days)
+            if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
+                print(f"BSE:SENSEX indicator history request: {history_days} days")
             # Shoonya identifies the NSE spot index by its broker symbol
             # "Nifty 50", while the workbook alias remains NSE:NIFTY INDEX.
             history_symbol = (
