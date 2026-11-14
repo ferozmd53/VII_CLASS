@@ -22,10 +22,8 @@ from Shoonya_OAuth import login_with_excel
 from get_auth import get_auth_code
 from Shoonya_Indicators import IndicatorEngine
 from Weekly import WeeklyDataEngine
-from Intraday_Indicators import IntradayIndicatorEngine
 
 weekly_data_engine = WeeklyDataEngine()
-intraday_indicator_engine = IntradayIndicatorEngine()
 #import Noren
 import os
 import time
@@ -1930,14 +1928,6 @@ def start_Trade_Terminal():
                 excel_TT, api,
                 request_weekly_symbol_subscription,
                 get_weekly_symbol_quote
-            )
-            # Create/update INDICATOR on the main Excel thread. Excel COM
-            # worksheet operations must use the workbook's owning thread.
-            intraday_indicator_engine.refresh_from_excel(
-                excel_TT, api,
-                request_weekly_symbol_subscription,
-                get_weekly_symbol_quote,
-                lambda symbol: Symbol_Token.get(_extract_symbol(symbol))
             )
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
