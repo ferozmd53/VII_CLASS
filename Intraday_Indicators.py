@@ -95,21 +95,19 @@ class IntradayIndicatorEngine:
             "ssboe": "epoch",
         }, inplace=True)
 
-        if "datetime" not in frame and "epoch" in frame:
-            frame["datetime"] = pd.to_numeric(frame["epoch"], errors="coerce")
-            frame["datetime"] = pd.to_datetime(
-                frame["datetime"], unit="s", errors="coerce"
-            )
-        elif "datetime" in frame:
+        if "datetime" in frame:
             parsed = frame["datetime"].map(
                 lambda value: pd.to_datetime(value, dayfirst=True, errors="coerce")
             )
-            if "epoch" in frame:
-                epoch = pd.to_numeric(frame["epoch"], errors="coerce")
-                parsed = parsed.fillna(
-                    pd.to_datetime(epoch, unit="s", errors="coerce")
-                )
-            frame["datetime"] = parsed
+        else:
+            parsed = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+        if "epoch" in frame:
+            epoch = pd.to_numeric(frame["epoch"], errors="coerce")
+            epoch_ist = pd.to_datetime(
+                epoch, unit="s", utc=True, errors="coerce"
+            ).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+            parsed = parsed.fillna(epoch_ist)
+        frame["datetime"] = parsed
 
         required = ("datetime", "open", "high", "low", "close")
         if any(column not in frame.columns for column in required):
@@ -303,41 +301,24 @@ class IntradayIndicatorEngine:
         upperpink = round(float(upperpink), 4) if pd.notna(upperpink) and upperpink > 0 else None
         return upperpink, mirror_value
 
-    @staticmethod
-    def _parse_candle_datetime(value):
-        if value in (None, ""):
-            return None
-        try:
-            parsed = pd.to_datetime(value, dayfirst=True, errors="coerce")
-            return None if pd.isna(parsed) else pd.Timestamp(parsed)
-        except Exception:
-            return None
-
-    def _result_for_interval(self, history, interval, ltp, selected_time, settings):
+    def _result_for_interval(self, history, interval, settings):
+        """Use the newest timestamped candle returned by Shoonya; never invent one."""
         if history is None or history.empty:
-            return None, None, None
+            return None, None, None, None
 
         frame = history.copy()
         frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
         frame = frame.dropna(subset=["datetime"]).sort_values("datetime")
-        if selected_time is not None:
-            target_bucket = selected_time.floor(f"{interval}min")
-            frame["_candle_bucket"] = frame["datetime"].dt.floor(f"{interval}min")
-            frame = frame[frame["_candle_bucket"] <= target_bucket]
-            if frame.empty or not (frame["_candle_bucket"] == target_bucket).any():
-                return None, None, None
-            frame = frame.drop_duplicates("_candle_bucket", keep="last")
-            candle = frame.iloc[-1]
-            frame = frame.drop(columns=["_candle_bucket"])
-            upperpink, mirror_upper = self._calculate(
-                frame, interval, live=False, settings=settings
-            )
-        else:
-            frame = self._merge_live_candle(frame, ltp, datetime.now(), interval)
-            candle = frame.iloc[-1]
-            upperpink, mirror_upper = self._calculate(
-                frame, interval, live=True, settings=settings
-            )
+        if frame.empty:
+            return None, None, None, None
+
+        # Shoonya history is the source of truth for both candle time and OHLCV.
+        # Do not synthesize a candle from local PC time or the latest WebSocket LTP.
+        frame = frame.drop_duplicates("datetime", keep="last").reset_index(drop=True)
+        candle = frame.iloc[-1]
+        upperpink, mirror_upper = self._calculate(
+            frame, interval, live=False, settings=settings
+        )
 
         candle_time = pd.Timestamp(candle["datetime"]).to_pydatetime()
         volume = self._number(candle.get("volume")) or 0
@@ -353,10 +334,6 @@ class IntradayIndicatorEngine:
     def update_symbol(self, api, symbol, token_key, quote, settings=None):
         exchange, token = token_key.split("|", 1)
         ltp = self._number(quote.get("lp") if isinstance(quote, dict) else None)
-        selected_time = (settings or {}).get("candle_datetime")
-        if ltp is None and selected_time is None:
-            return None, None, "WAITING FOR LIVE TICK"
-
         results = {}
         for interval in self.SUPPORTED_INTERVALS:
             key = f"{symbol}|{token}"
@@ -367,27 +344,14 @@ class IntradayIndicatorEngine:
             if history is None:
                 results[interval] = None
                 continue
-            result = self._result_for_interval(
-                history, interval, ltp, selected_time, settings
-            )
+            result = self._result_for_interval(history, interval, settings)
             results[interval] = result
-            if selected_time is None:
-                # Keep the live frame cache separate from the fetched-history cache.
-                live_frame = self._merge_live_candle(
-                    history, ltp, datetime.now(), interval
-                )
-                self.history[(key, interval)] = live_frame
 
         has_data = any(
             result is not None and len(result) == 4 and result[1] is not None
             for result in results.values()
         )
-        status = (
-            "CANDLE NOT IN HISTORY" if selected_time is not None and not has_data
-            else "HISTORICAL CANDLE" if selected_time is not None
-            else "LIVE" if has_data
-            else "LOADING HISTORY"
-        )
+        status = "BROKER CANDLE" if has_data else "LOADING BROKER HISTORY"
         self.latest[symbol] = (ltp, results, status)
         return results.get(1), results.get(5), status
 
@@ -445,8 +409,8 @@ class IntradayIndicatorEngine:
                     for col_number, default_value in enumerate(defaults, start=1):
                         if existing[col_number - 1] in (None, ""):
                             sheet.range((row_number, col_number)).value = default_value
-                if sheet.range("M1").value in (None, ""):
-                    sheet.range("M1").value = "CANDLE TIME"
+                # No manual candle-time selector: timestamps always come from Shoonya.
+                sheet.range("M1:N1").clear_contents()
                 sheet.range("A3:R3").value = [self.HEADERS]
                 # Remove obsolete columns beyond the new 18-column output.
                 sheet.range("S3:Z1000").clear_contents()
@@ -476,7 +440,6 @@ class IntradayIndicatorEngine:
                 "atr_highest": input_value("F2", 100),
                 "channel_multiplier": input_value("H2", 0.7),
                 "history_days": max(1, int(float(input_value("L1", self.HISTORY_DAYS)))),
-                "candle_datetime": self._parse_candle_datetime(input_value("N1", None)),
             }
 
             symbols = sheet.range("A4:A1000").value or []
