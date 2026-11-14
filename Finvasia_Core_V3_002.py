@@ -947,7 +947,8 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     if SYSTEM_EXCEL_OK is False:
         print("Live order blocked: Excel workbook is unavailable.")
         return None
-    try:        _ = get_terminal_workbook().sheets["LOGIN"].range("B3").value
+    try:
+        _ = get_terminal_workbook().sheets["LOGIN"].range("B3").value
     except Exception:
         print("Live order blocked: Excel workbook is not available.")
         return None
@@ -1896,7 +1897,8 @@ def start_Trade_Terminal():
             )
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
-                try:                    session_check = api.get_limits()
+                try:
+                    session_check = api.get_limits()
                     session_valid = (
                         isinstance(session_check, dict)
                         and str(session_check.get("stat", "")).strip().lower() == "ok"
@@ -2845,7 +2847,8 @@ def start_optionchain():
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
                                 dic_data = {'CE':LTP_of_Max_OI_Strike_CE,'PE':LTP_of_Max_OI_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                dic_data = {'CE':Max_Change_in_OI_addition_CE,'PE':Max_Change_in_OI_addition_PE}                                df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
+                                dic_data = {'CE':Max_Change_in_OI_addition_CE,'PE':Max_Change_in_OI_addition_PE}
+                                df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
                                 dic_data = {'CE':Max_OI_addition_at_Srike_CE,'PE':Max_OI_addition_at_Srike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
                                 dic_data = {'CE':LTP_of_Max_OI_addition_Strike_CE, 'PE':LTP_of_Max_OI_addition_Strike_PE}
