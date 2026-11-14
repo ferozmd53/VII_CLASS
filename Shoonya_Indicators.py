@@ -14,6 +14,77 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 
 
+def fetch_bse_sensex_history(start_date, end_date):
+    """Fallback daily OHLC history for BSE:SENSEX from BSE India's index archive."""
+    import io
+    import requests
+
+    url = "https://api.bseindia.com/BseIndiaAPI/api/ProduceCSVForDate/w"
+    params = {
+        "strIndex": "SENSEX",
+        "dtFromDate": start_date.strftime("%d/%m/%Y"),
+        "dtToDate": end_date.strftime("%d/%m/%Y"),
+        "period": "D",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept": "text/csv,application/json,text/plain,*/*",
+        "Referer": "https://www.bseindia.com/",
+    }
+    response = requests.get(url, params=params, headers=headers, timeout=20)
+    response.raise_for_status()
+    body = response.text.strip()
+    if not body:
+        raise ValueError("BSE index archive returned an empty response")
+
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = payload.get("Table") or payload.get("data") or payload.get("Data") or payload
+        frame = pd.DataFrame(payload if isinstance(payload, list) else [payload])
+    except Exception:
+        frame = pd.read_csv(io.StringIO(body))
+
+    if frame.empty:
+        raise ValueError("BSE index archive returned no SENSEX rows")
+
+    normalized = {
+        str(column).strip().lower().replace("_", " ").replace("-", " "): column
+        for column in frame.columns
+    }
+    def find_column(*names):
+        for name in names:
+            if name in normalized:
+                return normalized[name]
+        return None
+
+    date_col = find_column("date", "datetime", "time", "trade date", "index date")
+    open_col = find_column("open", "open value", "index open")
+    high_col = find_column("high", "high value", "index high")
+    low_col = find_column("low", "low value", "index low")
+    close_col = find_column("close", "close value", "index close", "closing")
+    if not all((date_col, open_col, high_col, low_col, close_col)):
+        raise ValueError(f"Unrecognized BSE SENSEX history columns: {list(frame.columns)}")
+
+    result = pd.DataFrame({
+        "datetime": pd.to_datetime(frame[date_col], dayfirst=True, errors="coerce"),
+        "open": pd.to_numeric(frame[open_col], errors="coerce"),
+        "high": pd.to_numeric(frame[high_col], errors="coerce"),
+        "low": pd.to_numeric(frame[low_col], errors="coerce"),
+        "close": pd.to_numeric(frame[close_col], errors="coerce"),
+    })
+    volume_col = find_column("volume", "total traded quantity", "traded quantity")
+    result["volume"] = (
+        pd.to_numeric(frame[volume_col], errors="coerce")
+        if volume_col else 0
+    )
+    result = result.dropna(subset=["datetime", "open", "high", "low", "close"])
+    result = result.sort_values("datetime").drop_duplicates("datetime").reset_index(drop=True)
+    if result.empty:
+        raise ValueError("BSE index archive response contained no valid OHLC candles")
+    return result
+
+
 class IndicatorEngine:
     SUPPORTED_EXCHANGES = {"NSE", "NFO", "BSE", "BFO", "CDS", "MCX"}
 
@@ -46,16 +117,9 @@ class IndicatorEngine:
         now = time.time()
         try:
             end_date = datetime.now()
-            # Shoonya's BSE:SENSEX daily-history request is reliable over the
-            # same 60-day window used by the working WEEKLY_DATA engine. A
-            # 1000-day request can fail for this index even while 60-day history
-            # is available. Keep the user's configured history range unchanged
-            # for every other instrument.
-            history_days = (
-                min(self.load_days, 60)
-                if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX"
-                else self.load_days
-            )
+            # Keep the configured historical range for SENSEX too; if Shoonya
+            # returns an incomplete index series, use BSE's official index archive. 
+            history_days = self.load_days
             # Use complete local calendar-day boundaries for EOD history.
             end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=0)
             start_date = (end_date - timedelta(days=history_days)).replace(
@@ -104,10 +168,32 @@ class IndicatorEngine:
                 return None
             if not rows:
                 print(f"Daily indicator history returned no candles for {exchange}:{symbol}")
+                frame = None
+            else:
+                frame = pd.DataFrame(rows)
+
+            if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
+                parsed_count = len(frame) if frame is not None else 0
+                if parsed_count < self.length_bb + 2:
+                    try:
+                        print(
+                            f"BSE:SENSEX Shoonya history incomplete ({parsed_count} rows); "
+                            "trying BSE index archive fallback"
+                        )
+                        frame = fetch_bse_sensex_history(start_date, end_date)
+                        print(
+                            f"BSE:SENSEX BSE archive history loaded: {len(frame)} candles "
+                            f"({frame['datetime'].iloc[0].date()} to {frame['datetime'].iloc[-1].date()})"
+                        )
+                    except Exception as fallback_exc:
+                        print(f"BSE:SENSEX BSE archive fallback failed: {fallback_exc}")
+                        if frame is None:
+                            self.retry_at[key] = now + self.retry_seconds
+                            return None
+
+            if frame is None:
                 self.retry_at[key] = now + self.retry_seconds
                 return None
-
-            frame = pd.DataFrame(rows)
             frame.rename(columns={
                 "time": "datetime", "into": "open", "inth": "high",
                 "intl": "low", "intc": "close", "intv": "volume", "ssboe": "epoch"
