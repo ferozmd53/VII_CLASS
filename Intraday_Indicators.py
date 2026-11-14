@@ -32,14 +32,18 @@ class IntradayIndicatorEngine:
     CHANNEL_INITIAL_BAR = 200
 
     HEADERS = [
-        "Symbol", "LTP", "Last Update",
-        "1m Mirror Upper", "1m Real Upper", "1m SMA High 5", "1m STD High 5",
-        "1m Channel ST", "1m Channel Upper", "1m Channel Lower",
-        "1m FakeOut Up", "1m FakeOut Down", "1m Trend", "1m Candle Time",
-        "5m Mirror Upper", "5m Real Upper", "5m SMA High 5", "5m STD High 5",
-        "5m Channel ST", "5m Channel Upper", "5m Channel Lower",
-        "5m FakeOut Up", "5m FakeOut Down", "5m Trend", "5m Candle Time",
+        "Symbol",
+        "1m Open", "1m High", "1m Low", "1m Close", "1m Volume",
+        "1m upperpink", "1m mirrorUpperBand",
+        "5m Open", "5m High", "5m Low", "5m Close", "5m Volume",
+        "5m upperpink", "5m mirrorUpperBand",
         "Data Status",
+    ]
+    INPUTS = [
+        ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "high",
+         "MIRROR LENGTH", 5, "MIRROR MULT", 1.7],
+        ["CHANNEL SOURCE", "high", "ATR LENGTH", 200, "ATR HIGHEST", 100,
+         "CHANNEL MULT", 0.7, "OUTPUT", "OHLCV + upperpink + mirrorUpperBand"],
     ]
 
     def __init__(self):
@@ -233,27 +237,41 @@ class IntradayIndicatorEngine:
             result[index] = previous_atr
         return pd.Series(result, index=frame.index, dtype="float64")
 
-    def _calculate(self, frame, interval, live=True):
-        if frame is None or len(frame) < self.MIRROR_LENGTH:
-            return [None] * 11
+    @staticmethod
+    def _source(frame, source_name):
+        name = str(source_name or "close").strip().lower()
+        if name not in ("open", "high", "low", "close"):
+            name = "close"
+        return frame[name].astype(float)
 
-        high = frame["high"].astype(float)
-        open_price = frame["open"].astype(float)
-        sma = high.rolling(self.MIRROR_LENGTH).mean()
-        # TradingView ta.stdev() defaults to biased/population deviation.
-        deviation = high.rolling(self.MIRROR_LENGTH).std(ddof=0)
-        real_upper = sma - (self.MIRROR_MULTIPLIER * deviation)
-        mirror_upper = (2.0 * open_price) - real_upper
+    def _calculate(self, frame, interval, live=True, settings=None):
+        if frame is None or len(frame) < 2:
+            return None, None
 
-        atr = self._wilder_atr(frame, self.CHANNEL_ATR_LENGTH)
-        channel_atr = atr.rolling(self.CHANNEL_HIGHEST_LENGTH).max() * self.CHANNEL_WIDTH
+        settings = settings or {}
+        mirror_source = self._source(frame, settings.get("mirror_source", "open"))
+        mirror_sma_source = self._source(frame, settings.get("mirror_sma_source", "high"))
+        mirror_length = max(1, int(settings.get("mirror_length", self.MIRROR_LENGTH)))
+        mirror_multiplier = float(settings.get("mirror_multiplier", self.MIRROR_MULTIPLIER))
+        channel_source = self._source(frame, settings.get("channel_source", "high"))
+        atr_length = max(1, int(settings.get("atr_length", self.CHANNEL_ATR_LENGTH)))
+        highest_length = max(1, int(settings.get("atr_highest", self.CHANNEL_HIGHEST_LENGTH)))
+        channel_width = float(settings.get("channel_multiplier", self.CHANNEL_WIDTH))
+
+        sma = mirror_sma_source.rolling(mirror_length).mean()
+        deviation = mirror_sma_source.rolling(mirror_length).std(ddof=0)
+        real_upper = sma - (mirror_multiplier * deviation)
+        mirror_upper = (2.0 * mirror_source) - real_upper
+
+        atr = self._wilder_atr(frame, atr_length)
+        channel_atr = atr.rolling(highest_length).max() * channel_width
 
         step_values = []
         upper_values = []
         lower_values = []
+        initial_bar = atr_length
         for index in range(len(frame)):
             previous_step = step_values[index - 1] if index else 0.0
-            previous_previous_step = step_values[index - 2] if index > 1 else 0.0
             width = channel_atr.iloc[index]
             if pd.isna(width):
                 upper = lower = float("nan")
@@ -261,16 +279,14 @@ class IntradayIndicatorEngine:
                 upper = previous_step + float(width)
                 lower = previous_step - float(width)
 
-            source = float(high.iloc[index])
-            # The source Pine script changes its step only on confirmed bars.
-            # Historical candles are confirmed; the last candle is provisional.
+            source_value = float(channel_source.iloc[index])
             confirmed = not (live and index == len(frame) - 1)
-            if index == self.CHANNEL_INITIAL_BAR:
-                step = source
+            if index == initial_bar:
+                step = source_value
             elif confirmed and not pd.isna(upper) and (
-                source > upper or source < lower
+                source_value > upper or source_value < lower
             ):
-                step = source
+                step = source_value
             else:
                 step = previous_step
 
@@ -279,58 +295,13 @@ class IntradayIndicatorEngine:
             lower_values.append(lower)
 
         current = len(frame) - 1
-        previous = current - 1
-        if previous < 0:
-            return [None] * 11
+        mirror_value = mirror_upper.iloc[current]
+        mirror_value = round(float(mirror_value), 4) if pd.notna(mirror_value) else None
+        upperpink = step_values[current]
+        upperpink = round(float(upperpink), 4) if upperpink > 0 else None
+        return upperpink, mirror_value
 
-        current_high = float(high.iloc[current])
-        previous_high = float(high.iloc[previous])
-        current_low = float(frame["low"].iloc[current])
-        previous_low = float(frame["low"].iloc[previous])
-        up_now = upper_values[current]
-        up_prev = upper_values[previous]
-        low_now = lower_values[current]
-        low_prev = lower_values[previous]
-
-        fakeout_up = (
-            not pd.isna(up_now) and not pd.isna(up_prev)
-            and previous_high >= up_prev and current_high < up_now
-            and step_values[current - 1] == step_values[current - 2]
-            if current > 1 else False
-        )
-        fakeout_down = (
-            not pd.isna(low_now) and not pd.isna(low_prev)
-            and previous_low <= low_prev and current_low > low_now
-            and step_values[current - 1] == step_values[current - 2]
-            if current > 1 else False
-        )
-
-        previous_step = step_values[previous]
-        current_step = step_values[current]
-        trend = "UP" if current_step > previous_step else (
-            "DOWN" if current_step < previous_step else "FLAT"
-        )
-        candle_time = pd.Timestamp(frame["datetime"].iloc[current]).strftime(
-            "%Y-%m-%d %H:%M"
-        )
-
-        def rounded(series):
-            value = series.iloc[current]
-            return round(float(value), 4) if pd.notna(value) else None
-
-        return [
-            rounded(mirror_upper), rounded(real_upper),
-            rounded(sma), rounded(deviation),
-            round(current_step, 4),
-            round(float(up_now), 4) if not pd.isna(up_now) else None,
-            round(float(low_now), 4) if not pd.isna(low_now) else None,
-            "YES" if fakeout_up else "",
-            "YES" if fakeout_down else "",
-            trend,
-            candle_time,
-        ]
-
-    def update_symbol(self, api, symbol, token_key, quote):
+    def update_symbol(self, api, symbol, token_key, quote, settings=None):
         exchange, token = token_key.split("|", 1)
         ltp = self._number(quote.get("lp") if isinstance(quote, dict) else None)
         if ltp is None:
@@ -341,15 +312,29 @@ class IntradayIndicatorEngine:
             key = f"{symbol}|{token}"
             history = self._get_history(api, exchange, token, interval, key)
             if history is None:
-                results[interval] = [None] * 11
+                results[interval] = (None, None, None)
                 continue
             live_frame = self._merge_live_candle(
                 history, ltp, datetime.now(), interval
             )
             self.history[(key, interval)] = live_frame
-            results[interval] = self._calculate(live_frame, interval, live=True)
+            upperpink, mirror_upper = self._calculate(
+                live_frame, interval, live=True, settings=settings
+            )
+            candle = live_frame.iloc[-1]
+            volume = self._number(candle.get("volume")) or 0
+            ohlcv = [
+                self._number(candle.get("open")),
+                self._number(candle.get("high")),
+                self._number(candle.get("low")),
+                self._number(candle.get("close")),
+                volume,
+            ]
+            results[interval] = (ohlcv, upperpink, mirror_upper)
 
-        status = "LIVE" if any(value[0] is not None for value in results.values()) else "LOADING HISTORY"
+        status = "LIVE" if any(
+            value[0] is not None for value in results.values()
+        ) else "LOADING HISTORY"
         self.latest[symbol] = (ltp, results, status)
         return results.get(1), results.get(5), status
 
@@ -399,15 +384,39 @@ class IntradayIndicatorEngine:
         try:
             sheet, is_new = self._get_or_create_sheet(workbook)
             if is_new or not self.sheet_ready:
-                sheet.range("A3:Z3").value = [self.HEADERS]
-                sheet.range("A3:Z3").api.Font.Bold = True
-                sheet.range("A3:Z3").api.WrapText = True
+                # Populate editable input controls only when blank, preserving user settings.
+                for row_number, defaults in enumerate(self.INPUTS, start=1):
+                    existing = sheet.range(f"A{row_number}:J{row_number}").value
+                    existing = existing if isinstance(existing, list) else [existing]
+                    existing = (existing + [None] * 10)[:10]
+                    for col_number, default_value in enumerate(defaults, start=1):
+                        if existing[col_number - 1] in (None, ""):
+                            sheet.range((row_number, col_number)).value = default_value
+                sheet.range("A3:P3").value = [self.HEADERS]
+                sheet.range("A1:J2").api.Font.Bold = True
+                sheet.range("A3:P3").api.Font.Bold = True
+                sheet.range("A1:J3").api.WrapText = True
                 self.sheet_ready = True
                 try:
                     workbook.save()
-                    print("INTRADAY sheet headers and symbol list saved to the active workbook.")
+                    print("INTRADAY inputs, headers and symbol list saved to the active workbook.")
                 except Exception as save_error:
                     print(f"INTRADAY sheet save failed: {save_error}")
+
+            def input_value(cell, default):
+                value = sheet.range(cell).value
+                return default if value in (None, "") else value
+
+            settings = {
+                "mirror_source": input_value("D1", "open"),
+                "mirror_sma_source": input_value("F1", "high"),
+                "mirror_length": input_value("H1", 5),
+                "mirror_multiplier": input_value("J1", 1.7),
+                "channel_source": input_value("B2", "high"),
+                "atr_length": input_value("D2", 200),
+                "atr_highest": input_value("F2", 100),
+                "channel_multiplier": input_value("H2", 0.7),
+            }
 
             symbols = sheet.range("A4:A1000").value or []
             last_index = max(
@@ -418,7 +427,7 @@ class IntradayIndicatorEngine:
             last_row = 4 + last_index
             if last_index < 0:
                 if self.last_written_row > 3:
-                    sheet.range(f"A4:Z{self.last_written_row}").clear_contents()
+                    sheet.range(f"A4:P{self.last_written_row}").clear_contents()
                     self.last_written_row = 3
                 return
 
@@ -433,23 +442,28 @@ class IntradayIndicatorEngine:
                 quote = quote_callback(symbol)
                 token_key = token_callback(symbol)
                 if not token_key or not isinstance(quote, dict):
-                    output.append([symbol, None, None] + [None] * 22 + ["WAITING FOR SUBSCRIPTION"])
+                    output.append([symbol] + [None] * 14 + ["WAITING FOR SUBSCRIPTION"])
                     continue
 
                 one_minute, five_minute, status = self.update_symbol(
-                    api, symbol, token_key, quote
+                    api, symbol, token_key, quote, settings=settings
                 )
-                ltp = self._number(quote.get("lp"))
+                def timeframe_values(result):
+                    if not result or result[0] is None:
+                        return [None] * 7
+                    ohlcv, upperpink, mirror_upper = result
+                    return list(ohlcv) + [upperpink, mirror_upper]
+
                 output.append(
-                    [symbol, ltp, datetime.now().strftime("%H:%M:%S")]
-                    + (one_minute or [None] * 11)
-                    + (five_minute or [None] * 11)
+                    [symbol]
+                    + timeframe_values(one_minute)
+                    + timeframe_values(five_minute)
                     + [status]
                 )
 
-            sheet.range(f"A4:Z{last_row}").value = output
+            sheet.range(f"A4:P{last_row}").value = output
             if self.last_written_row > last_row:
-                sheet.range(f"A{last_row + 1}:Z{self.last_written_row}").clear_contents()
+                sheet.range(f"A{last_row + 1}:P{self.last_written_row}").clear_contents()
             self.last_written_row = last_row
         except Exception as exc:
             print(f"INTRADAY sheet refresh failed: {exc}")
