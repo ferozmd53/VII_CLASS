@@ -269,7 +269,7 @@ class WeeklyDataEngine:
                 subscribe_callback(symbol)
                 quote = quote_callback(symbol)
                 row = self.update(api, exchange, tradingsymbol, quote)
-                output_rows.append(row[1:] if row else [exchange] + [None] * 8)
+                output_rows.append(row if row else [exchange] + [None] * 8)
 
             # Keep each weekly output on the exact row where its symbol is entered.
             sheet.range("B4:J1000").value = output_rows
