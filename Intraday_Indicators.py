@@ -508,7 +508,7 @@ class IntradayIndicatorEngine:
             results[interval] = result
 
         has_data = any(
-            result is not None and len(result) == 4 and result[1] is not None
+            result is not None and len(result) == 6 and result[1] is not None
             for result in results.values()
         )
         status = "BROKER CANDLE" if has_data else "LOADING BROKER HISTORY"
@@ -636,7 +636,7 @@ class IntradayIndicatorEngine:
                 quote = quote_callback(symbol)
                 token_key = token_callback(symbol)
                 if not token_key or not isinstance(quote, dict):
-                    output.append([symbol] + [None] * 16 + ["WAITING FOR SUBSCRIPTION"])
+                    output.append([symbol] + [None] * 16 + ["WAITING FOR SUBSCRIPTION"] + [None] * 5)
                     continue
 
                 one_minute, five_minute, status = self.update_symbol(
