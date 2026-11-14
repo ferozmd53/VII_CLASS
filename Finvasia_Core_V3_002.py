@@ -1546,9 +1546,18 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
         return
     with SIDE_TRIGGER_STATE_LOCK:
         state = SIDE_TRIGGER_STATE.get(key)
-        if state is None:
-            existing_id = sheet.range(f"{id_col}{row_number}").value
-            existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
+        existing_id = sheet.range(f"{id_col}{row_number}").value
+        existing_status = str(sheet.range(f"{status_col}{row_number}").value or "").strip()
+        id_is_blank = existing_id is None or not str(existing_id).strip()
+        status_is_blank = not existing_status
+
+        # If both broker tracking cells are blank, treat the active BUY/SELL
+        # trigger as a fresh command even if an old in-memory latch remains.
+        # QUEUED/SUBMITTING/PENDING or any broker result prevents resubmission.
+        if id_is_blank and status_is_blank:
+            state = {"armed": False}
+            SIDE_TRIGGER_STATE[key] = state
+        elif state is None:
             if existing_id not in (None, "") or (
                 existing_status and not existing_status.upper().startswith("WAITING:")
             ):
