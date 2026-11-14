@@ -99,9 +99,16 @@ class WeeklyDataEngine:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=self.history_days)
         try:
+            # Keep the workbook alias, but request history using Shoonya's
+            # actual NSE spot-index trading symbol.
+            history_symbol = (
+                "Nifty 50"
+                if exchange.upper() == "NSE" and symbol.strip().upper() == "NIFTY INDEX"
+                else symbol
+            )
             raw = api.get_daily_price_series(
                 exchange=exchange,
-                tradingsymbol=symbol,
+                tradingsymbol=history_symbol,
                 startdate=str(int(start_date.timestamp())),
                 enddate=str(int(end_date.timestamp()))
             )
