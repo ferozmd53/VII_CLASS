@@ -1766,6 +1766,29 @@ def start_Trade_Terminal():
             with subscription_lock:
                 subscription_pending.discard(symbol)
 
+    def request_weekly_symbol_subscription(symbol):
+        symbol = _extract_symbol(symbol)
+        if not symbol:
+            return
+        with subscription_lock:
+            retry_ready = _monotonic() >= subscription_retry_after.get(symbol, 0.0)
+            needs_subscription = (
+                symbol not in terminal_subscribed
+                and symbol not in subscription_pending
+                and retry_ready
+            )
+            if needs_subscription:
+                subscription_pending.add(symbol)
+        if needs_subscription:
+            subscription_executor.submit(subscribe_symbol_in_background, symbol)
+
+    def get_weekly_symbol_quote(symbol):
+        token_key = Symbol_Token.get(symbol)
+        if not token_key:
+            return {}
+        with LIVE_DATA_LOCK:
+            return dict(live_data.get(token_key, {}))
+
     def write_live_market_data():
         pythoncom = None
         try:
@@ -1825,6 +1848,11 @@ def start_Trade_Terminal():
         try:
             excel_TT = get_terminal_workbook()
             tt = get_live_trade_sheet(excel_TT)
+            weekly_data_engine.refresh_from_excel(
+                excel_TT, api,
+                request_weekly_symbol_subscription,
+                get_weekly_symbol_quote
+            )
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
                 try:
