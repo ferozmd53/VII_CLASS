@@ -617,6 +617,66 @@ SOCKET_SUBSCRIPTIONS_LOCK = Lock()
 SOCKET_SUBSCRIBE_SEND_LOCK = Lock()
 indicator_engine = IndicatorEngine()
 
+# Indicator/history controls are stored on LOGIN!A16:B23.
+INDICATOR_LOGIN_DEFAULTS = [
+    ("Historical Days", 500),
+    ("RSI Length", 14),
+    ("StochRSI Length", 14),
+    ("SMA Stoch Length", 3),
+    ("Bollinger Length", 20),
+    ("Bollinger StdDev", 2.0),
+    ("Stoch Upper", 70),
+    ("Stoch Lower", 30),
+]
+
+def configure_indicator_engine_from_login():
+    """Read indicator controls from LOGIN; write defaults for blank cells."""
+    global indicator_engine
+    workbook = get_terminal_workbook()
+    login_sheet = get_login_settings_sheet(workbook)
+    values = {}
+    for row, (label, default) in enumerate(INDICATOR_LOGIN_DEFAULTS, start=16):
+        login_sheet.range(f"A{row}").value = label
+        raw_value = login_sheet.range(f"B{row}").value
+        try:
+            value = float(raw_value) if raw_value not in (None, "") else float(default)
+        except (TypeError, ValueError):
+            value = float(default)
+        if value <= 0:
+            value = float(default)
+        if label != "Bollinger StdDev":
+            value = int(value)
+        login_sheet.range(f"B{row}").value = value
+        values[label] = value
+
+    # Avoid invalid rolling windows and impossible StochRSI thresholds.
+    values["Historical Days"] = max(30, min(5000, values["Historical Days"]))
+    values["RSI Length"] = max(2, min(200, values["RSI Length"]))
+    values["StochRSI Length"] = max(2, min(200, values["StochRSI Length"]))
+    values["SMA Stoch Length"] = max(1, min(50, values["SMA Stoch Length"]))
+    values["Bollinger Length"] = max(2, min(200, values["Bollinger Length"]))
+    values["Bollinger StdDev"] = max(0.1, min(10.0, values["Bollinger StdDev"]))
+    values["Stoch Upper"] = max(1, min(100, values["Stoch Upper"]))
+    values["Stoch Lower"] = max(0, min(99, values["Stoch Lower"]))
+    if values["Stoch Lower"] >= values["Stoch Upper"]:
+        values["Stoch Lower"], values["Stoch Upper"] = 30, 70
+
+    indicator_engine = IndicatorEngine(
+        load_days=values["Historical Days"],
+        length_rsi=values["RSI Length"],
+        length_stoch=values["StochRSI Length"],
+        length_sma_stoch=values["SMA Stoch Length"],
+        length_bb=values["Bollinger Length"],
+        bb_std=values["Bollinger StdDev"],
+        stoch_upper=values["Stoch Upper"],
+        stoch_lower=values["Stoch Lower"],
+    )
+    workbook.save()
+    print("Indicator settings loaded from LOGIN: " + ", ".join(
+        f"{key}={value}" for key, value in values.items()
+    ))
+
+
 Telegram_Message = ["Welcome to Python Trader excel based trade terminal","Have a Good Day"]
 print(Telegram_Message)
 Voice_Message = []
@@ -3571,6 +3631,7 @@ def getholdings():
 def StartThread():
     excel_name = get_terminal_workbook()
     Config_sheet = get_login_settings_sheet(excel_name)
+    configure_indicator_engine_from_login()
     try:
         threads = []
         if Config_sheet.range("E2").value == True:
