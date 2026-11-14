@@ -219,10 +219,18 @@ class IntradayIndicatorEngine:
             (high - previous_close).abs(),
             (low - previous_close).abs(),
         ], axis=1).max(axis=1)
-        # Pine ta.atr() uses Wilder's RMA (alpha=1/length).
-        return true_range.ewm(
-            alpha=1.0 / length, adjust=False, min_periods=length
-        ).mean()
+        # Pine ta.atr() uses Wilder's RMA, seeded by the first SMA(length).
+        values = true_range.astype(float).tolist()
+        result = [float("nan")] * len(values)
+        if len(values) < length:
+            return pd.Series(result, index=frame.index, dtype="float64")
+        seed = sum(values[:length]) / float(length)
+        result[length - 1] = seed
+        previous_atr = seed
+        for index in range(length, len(values)):
+            previous_atr = ((previous_atr * (length - 1)) + values[index]) / length
+            result[index] = previous_atr
+        return pd.Series(result, index=frame.index, dtype="float64")
 
     def _calculate(self, frame, interval, live=True):
         if frame is None or len(frame) < self.MIRROR_LENGTH:
