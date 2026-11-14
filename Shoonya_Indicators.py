@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+from Intraday_Indicators import CandleCache
 
 
 def fetch_bse_sensex_history(start_date, end_date):
@@ -95,6 +96,8 @@ class IndicatorEngine:
         length_stoch=14, length_sma_stoch=3, length_bb=20,
         bb_std=2.0, stoch_upper=70, stoch_lower=30
     ):
+        self.candle_cache = CandleCache()
+        print(f"Daily candle cache: {self.candle_cache.database_path}")
         self.load_days = load_days
         self.retry_seconds = retry_seconds
         self.history = {}
@@ -128,6 +131,10 @@ class IndicatorEngine:
             start_date = (end_date - timedelta(days=history_days)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
+            cached = self.candle_cache.load(exchange, symbol, "1d")
+            if cached is not None and not cached.empty:
+                cached_latest = pd.to_datetime(cached["datetime"], errors="coerce").max()
+                start_date = max(start_date, (cached_latest - timedelta(days=2)).to_pydatetime())
             if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
                 print(
                     f"BSE:SENSEX indicator history request: symbol={symbol}, "
@@ -256,6 +263,15 @@ class IndicatorEngine:
 
     def _get_history_without_waiting(self, api, exchange, symbol, key):
         frame = self.history.get(key)
+        if frame is None:
+            try:
+                frame = self.candle_cache.load(exchange, symbol, "1d")
+                if frame is not None and not frame.empty:
+                    frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+                    self.history[key] = frame
+                    print(f"Daily SQLite cache loaded for {exchange}:{symbol}: {len(frame)} candles")
+            except Exception as cache_error:
+                print(f"Daily SQLite cache read failed for {exchange}:{symbol}: {cache_error}")
         future = self.pending.get(key)
 
         if future is not None and future.done():
@@ -263,8 +279,10 @@ class IndicatorEngine:
             try:
                 refreshed = future.result()
                 if refreshed is not None and not refreshed.empty:
-                    frame = refreshed
-                    self.history[key] = refreshed
+                    frame = pd.concat([frame, refreshed], ignore_index=True) if frame is not None else refreshed
+                    frame = frame.sort_values("datetime").drop_duplicates("datetime", keep="last").reset_index(drop=True)
+                    self.candle_cache.save(exchange, symbol, "1d", frame)
+                    self.history[key] = frame
                     self.refresh_at[key] = time.time() + 60
             except Exception as exc:
                 print(f"Indicator history worker failed for {exchange}:{symbol}: {exc}")
