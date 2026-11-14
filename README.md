@@ -10,7 +10,7 @@ Open Command Prompt and run these commands one by one:
 
 ```bat
 pip uninstall VII_CLASS -y
-pip install --upgrade --no-cache-dir git+https://github.com/ferozmd53/VII_CLASS.git
+pip install --no-cache-dir --upgrade git+https://github.com/ferozmd53/VII_CLASS.git@271234a
 ```
 
 If you use Python 3.13 installed at `C:\Python313`, use:
