@@ -28,7 +28,7 @@ class WeeklyDataEngine:
             max_workers=3, thread_name_prefix="ShoonyaWeeklyHistory"
         )
         self.sheet_ready = False
-        self.last_written_count = 0
+        self.last_refresh_monotonic = 0.0
         self.last_history_error = {}
 
     @staticmethod
@@ -211,41 +211,67 @@ class WeeklyDataEngine:
         week_start = current_week.start_time.date()
         week_end = week_start + timedelta(days=4)
         self.latest_rows[key] = [
-            f"{exchange}:{symbol}", exchange, week_start.isoformat(),
-            week_end.isoformat(),
+            exchange, week_start.strftime("%d/%m/%Y"),
+            week_end.strftime("%d/%m/%Y"),
             round(float(candle["open"]), 4),
             round(float(candle["high"]), 4),
             round(float(candle["low"]), 4),
             round(float(candle["close"]), 4),
             int(candle["volume"]) if pd.notna(candle["volume"]) else 0,
-            now.strftime("%Y-%m-%d %H:%M:%S")
+            now.strftime("%d/%m/%Y %H:%M")
         ]
         return self.latest_rows[key]
 
-    def write_to_excel(self, workbook):
+    def _get_or_create_sheet(self, workbook):
+        sheet_names = [sheet.name for sheet in workbook.sheets]
+        if "WEEKLY_DATA" in sheet_names:
+            return workbook.sheets["WEEKLY_DATA"], False
+        sheet = workbook.sheets.add("WEEKLY_DATA")
+        print("Created WEEKLY_DATA sheet for live weekly OHLCV.")
         try:
-            sheet_names = [sheet.name for sheet in workbook.sheets]
-            if "WEEKLY_DATA" in sheet_names:
-                sheet = workbook.sheets["WEEKLY_DATA"]
-            else:
-                sheet = workbook.sheets.add("WEEKLY_DATA")
-                print("Created WEEKLY_DATA sheet for live weekly OHLCV.")
+            live_sheet = next(
+                (item for item in workbook.sheets
+                 if item.name in ("LIVE_TRADE", "Trade_Terminal")),
+                None
+            )
+            if live_sheet is not None:
+                # Seed the new weekly input list from the current live-trade rows.
+                sheet.range("A4:A1000").value = live_sheet.range("A4:A1000").value
+        except Exception as exc:
+            print(f"Could not copy initial LIVE_TRADE symbols to WEEKLY_DATA: {exc}")
+        return sheet, True
 
-            if not self.sheet_ready:
-                sheet.range("A1:J1").value = self.HEADERS
-                sheet.range("A1:J1").api.Font.Bold = True
+    def refresh_from_excel(self, workbook, api, subscribe_callback, quote_callback):
+        try:
+            now_mono = time.monotonic()
+            if now_mono - self.last_refresh_monotonic < 1.0:
+                return
+            self.last_refresh_monotonic = now_mono
+
+            sheet, is_new = self._get_or_create_sheet(workbook)
+            if is_new or not self.sheet_ready:
+                sheet.range("A3:J3").value = [[
+                    "Symbol", "Exchange", "Week Start", "Week End",
+                    "Open", "High", "Low", "Close", "Volume", "Last Update"
+                ]]
+                sheet.range("A3:J3").api.Font.Bold = True
                 self.sheet_ready = True
 
-            rows = [
-                self.latest_rows[key]
-                for key in sorted(self.latest_rows)
-            ]
-            if rows:
-                sheet.range(f"A2:J{len(rows) + 1}").value = rows
-            if self.last_written_count > len(rows):
-                sheet.range(
-                    f"A{len(rows) + 2}:J{self.last_written_count + 1}"
-                ).clear_contents()
-            self.last_written_count = len(rows)
+            selected_values = sheet.range("A4:A1000").value or []
+            output_rows = []
+            for value in selected_values:
+                symbol = str(value or "").strip().upper()
+                if len(symbol) < 6 or symbol[3] != ":":
+                    output_rows.append([None] * 9)
+                    continue
+
+                exchange, tradingsymbol = symbol[:3], symbol[4:]
+                subscribe_callback(symbol)
+                quote = quote_callback(symbol)
+                row = self.update(api, exchange, tradingsymbol, quote)
+                output_rows.append(row[1:] if row else [exchange] + [None] * 8)
+
+            # Keep each weekly output on the exact row where its symbol is entered.
+            sheet.range("B4:J1000").value = output_rows
         except Exception as exc:
             print(f"Weekly Excel sheet update failed: {exc}")
