@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+from Shoonya_Indicators import fetch_bse_sensex_history
 
 
 class WeeklyDataEngine:
@@ -129,6 +130,21 @@ class WeeklyDataEngine:
                     f"sample={str(raw[:2] if isinstance(raw, (list, tuple)) else raw)[:1200]}"
                 )
             frame = self._parse_history(raw)
+            if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
+                parsed_count = len(frame) if frame is not None else 0
+                if parsed_count < 7:
+                    try:
+                        print(
+                            f"BSE:SENSEX weekly Shoonya history incomplete ({parsed_count} rows); "
+                            "trying BSE index archive fallback"
+                        )
+                        frame = fetch_bse_sensex_history(start_date, end_date)
+                        print(
+                            f"BSE:SENSEX weekly BSE archive history loaded: {len(frame)} candles "
+                            f"({frame['datetime'].iloc[0].date()} to {frame['datetime'].iloc[-1].date()})"
+                        )
+                    except Exception as fallback_exc:
+                        print(f"BSE:SENSEX weekly BSE archive fallback failed: {fallback_exc}")
             if frame is None:
                 message = raw.get("emsg") or raw.get("stat") if isinstance(raw, dict) else "no daily candles"
                 print(f"Weekly history unavailable for {exchange}:{symbol}: {message}")
