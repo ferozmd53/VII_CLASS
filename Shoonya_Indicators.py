@@ -56,9 +56,18 @@ class IndicatorEngine:
                 if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX"
                 else self.load_days
             )
-            start_date = end_date - timedelta(days=history_days)
+            # Use complete local calendar-day boundaries for EOD history.
+            end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=0)
+            start_date = (end_date - timedelta(days=history_days)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
             if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
-                print(f"BSE:SENSEX indicator history request: {history_days} days")
+                print(
+                    f"BSE:SENSEX indicator history request: symbol={symbol}, "
+                    f"exchange={exchange}, days={history_days}, "
+                    f"from={start_date.strftime('%Y-%m-%d %H:%M:%S')}, "
+                    f"to={end_date.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
             # Shoonya identifies the NSE spot index by its broker symbol
             # "Nifty 50", while the workbook alias remains NSE:NIFTY INDEX.
             history_symbol = (
@@ -72,6 +81,13 @@ class IndicatorEngine:
                 startdate=str(int(start_date.timestamp())),
                 enddate=str(int(end_date.timestamp()))
             )
+            if exchange.upper() == "BSE" and symbol.strip().upper() == "SENSEX":
+                raw_count = len(raw) if isinstance(raw, (list, tuple)) else "not-a-list"
+                print(
+                    f"BSE:SENSEX indicator raw history response: "
+                    f"type={type(raw).__name__}, count={raw_count}, "
+                    f"sample={str(raw[:2] if isinstance(raw, (list, tuple)) else raw)[:1200]}"
+                )
             rows = []
             for item in raw or []:
                 if isinstance(item, str):
