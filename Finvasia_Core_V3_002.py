@@ -25,6 +25,9 @@ warnings.filterwarnings("ignore")
 from Shoonya_OAuth import login_with_excel
 from get_auth import get_auth_code
 from Shoonya_Indicators import IndicatorEngine
+from Weekly import WeeklyDataEngine
+
+weekly_data_engine = WeeklyDataEngine()
 #import Noren
 import os
 import time
@@ -1929,6 +1932,9 @@ def start_Trade_Terminal():
                                 convert_to_float(quote.get("lp", 0))
                             )
 
+                            # Weekly OHLCV is maintained by the separate Weekly.py module.
+                            weekly_data_engine.update(api, exchange, tradingsymbol, quote)
+
                             try:
                                 trade_info = trading_info[idx]
                                 excel_row = idx + 4
@@ -2245,6 +2251,7 @@ def start_Trade_Terminal():
                 idx += 1
 
             tt.range("AG4:AN1000").value = indicator_list
+            weekly_data_engine.write_to_excel(excel_TT)
             tt.range("AA4:AF1000").value = tt.range("BM4:BR1000").value
             sleep(0.15)
                 
