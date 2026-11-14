@@ -1021,7 +1021,8 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
         trigger_price = price
         
         if buy_or_sell == 'BUY':
-            market_safety = get_market_safety_percent()\n            price = price * (100 + market_safety) / 100
+            market_safety = get_market_safety_percent()
+            price = price * (100 + market_safety) / 100
             if exchange == 'CDS':
                 round_to = .0025
                 result = ( int(price / round_to) + 1) * round_to
@@ -1031,7 +1032,8 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
                 result = ( int(price / round_to) + 1) * round_to
                 price = float( "{:.1f}".format(result) )
         else:
-            market_safety = get_market_safety_percent()\n            price = price * (100 - market_safety) / 100
+            market_safety = get_market_safety_percent()
+            price = price * (100 - market_safety) / 100
             if exchange == 'CDS':
                 round_to = .0025
                 result = ( int(price / round_to) ) * round_to
