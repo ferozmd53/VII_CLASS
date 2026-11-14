@@ -947,8 +947,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     if SYSTEM_EXCEL_OK is False:
         print("Live order blocked: Excel workbook is unavailable.")
         return None
-    try:
-        _ = get_terminal_workbook().sheets["LOGIN"].range("B3").value
+    try:        _ = get_terminal_workbook().sheets["LOGIN"].range("B3").value
     except Exception:
         print("Live order blocked: Excel workbook is not available.")
         return None
@@ -1897,8 +1896,7 @@ def start_Trade_Terminal():
             )
             current_reconnect_generation = EXCEL_RECONNECT_GENERATION
             if current_reconnect_generation != last_excel_reconnect_generation:
-                try:
-                    session_check = api.get_limits()
+                try:                    session_check = api.get_limits()
                     session_valid = (
                         isinstance(session_check, dict)
                         and str(session_check.get("stat", "")).strip().lower() == "ok"
@@ -2847,8 +2845,7 @@ def start_optionchain():
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
                                 dic_data = {'CE':LTP_of_Max_OI_Strike_CE,'PE':LTP_of_Max_OI_Strike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
-                                dic_data = {'CE':Max_Change_in_OI_addition_CE,'PE':Max_Change_in_OI_addition_PE}
-                                df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
+                                dic_data = {'CE':Max_Change_in_OI_addition_CE,'PE':Max_Change_in_OI_addition_PE}                                df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
                                 dic_data = {'CE':Max_OI_addition_at_Srike_CE,'PE':Max_OI_addition_at_Srike_PE}
                                 df_additional_detail = pd.concat([df_additional_detail, pd.DataFrame.from_dict(dic_data,orient='index').T],ignore_index = True)
                                 dic_data = {'CE':LTP_of_Max_OI_addition_Strike_CE, 'PE':LTP_of_Max_OI_addition_Strike_PE}
@@ -3657,20 +3654,21 @@ def start_Open_Position():
                 print(f"Exception occur in Holdings : {e}")
             pass
         try:
-            if excel_op.sheets.active.name == "OrderBook":
-                df_orderbook = get_order_book()
-                if (len(df_orderbook) > 0):
-                    op_ob.range("b1").options(index=False,header=True).value = df_orderbook
-                    UserAction = op_ob.range(f"a{2}:a{1 + len(df_orderbook)}").value
-                    if UserAction is not None:
-                        for i in range (0,len(df_orderbook)):
-                            if UserAction[i] == 'CANCEL' or UserAction[i] == 'C':
-                                try:
-                                    api.cancel_order(orderno=df_orderbook['Order No'][i])
-                                except Exception as e:
-                                    print(f"Order can't be cancelled with reason : {e}")
-                                    pass
-                                op_ob.range(f"a{2+i}").value = None
+            # Refresh OrderBook continuously, even when another Excel sheet is active.
+            # Excel can update an inactive worksheet directly; do not gate this on the active tab.
+            df_orderbook = get_order_book()
+            if (len(df_orderbook) > 0):
+                op_ob.range("b1").options(index=False,header=True).value = df_orderbook
+                UserAction = op_ob.range(f"a{2}:a{1 + len(df_orderbook)}").value
+                if UserAction is not None:
+                    for i in range (0,len(df_orderbook)):
+                        if UserAction[i] == 'CANCEL' or UserAction[i] == 'C':
+                            try:
+                                api.cancel_order(orderno=df_orderbook['Order No'][i])
+                            except Exception as e:
+                                print(f"Order can't be cancelled with reason : {e}")
+                                pass
+                            op_ob.range(f"a{2+i}").value = None
         except Exception as e:
             if not is_excel_connection_lost():
                 print(f"Exception occur in OrderBook : {e}")
