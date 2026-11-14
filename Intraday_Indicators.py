@@ -33,10 +33,10 @@ class IntradayIndicatorEngine:
 
     HEADERS = [
         "Symbol", "LTP", "Last Update",
-        "1m Mirror Upper", "1m SMA High 5", "1m STD High 5",
+        "1m Mirror Upper", "1m Real Upper", "1m SMA High 5", "1m STD High 5",
         "1m Channel ST", "1m Channel Upper", "1m Channel Lower",
         "1m FakeOut Up", "1m FakeOut Down", "1m Trend", "1m Candle Time",
-        "5m Mirror Upper", "5m SMA High 5", "5m STD High 5",
+        "5m Mirror Upper", "5m Real Upper", "5m SMA High 5", "5m STD High 5",
         "5m Channel ST", "5m Channel Upper", "5m Channel Lower",
         "5m FakeOut Up", "5m FakeOut Down", "5m Trend", "5m Candle Time",
         "Data Status",
@@ -234,7 +234,7 @@ class IntradayIndicatorEngine:
 
     def _calculate(self, frame, interval, live=True):
         if frame is None or len(frame) < self.MIRROR_LENGTH:
-            return [None] * 10
+            return [None] * 11
 
         high = frame["high"].astype(float)
         open_price = frame["open"].astype(float)
@@ -339,7 +339,7 @@ class IntradayIndicatorEngine:
             key = f"{symbol}|{token}"
             history = self._get_history(api, exchange, token, interval, key)
             if history is None:
-                results[interval] = [None] * 10
+                results[interval] = [None] * 11
                 continue
             live_frame = self._merge_live_candle(
                 history, ltp, datetime.now(), interval
@@ -380,9 +380,9 @@ class IntradayIndicatorEngine:
         try:
             sheet, is_new = self._get_or_create_sheet(workbook)
             if is_new or not self.sheet_ready:
-                sheet.range("A3:X3").value = [self.HEADERS]
-                sheet.range("A3:X3").api.Font.Bold = True
-                sheet.range("A3:X3").api.WrapText = True
+                sheet.range("A3:Z3").value = [self.HEADERS]
+                sheet.range("A3:Z3").api.Font.Bold = True
+                sheet.range("A3:Z3").api.WrapText = True
                 self.sheet_ready = True
 
             symbols = sheet.range("A4:A1000").value or []
@@ -397,7 +397,7 @@ class IntradayIndicatorEngine:
                 quote = quote_callback(symbol)
                 token_key = token_callback(symbol)
                 if not token_key or not isinstance(quote, dict):
-                    output.append([symbol, None, None] + [None] * 20 + ["WAITING FOR SUBSCRIPTION"])
+                    output.append([symbol, None, None] + [None] * 22 + ["WAITING FOR SUBSCRIPTION"])
                     continue
 
                 one_minute, five_minute, status = self.update_symbol(
@@ -406,11 +406,11 @@ class IntradayIndicatorEngine:
                 ltp = self._number(quote.get("lp"))
                 output.append(
                     [symbol, ltp, datetime.now().strftime("%H:%M:%S")]
-                    + (one_minute or [None] * 10)
-                    + (five_minute or [None] * 10)
+                    + (one_minute or [None] * 11)
+                    + (five_minute or [None] * 11)
                     + [status]
                 )
 
-            sheet.range("A4:X1000").value = output
+            sheet.range("A4:Z1000").value = output
         except Exception as exc:
             print(f"INDICATOR sheet refresh failed: {exc}")
