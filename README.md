@@ -110,7 +110,7 @@ The original Finvasia source attribution and license are retained in this reposi
 
 The separate `Weekly.py` module creates a `WEEKLY_DATA` worksheet automatically. It loads recent daily candles in background workers, combines them into the current Monday-to-Friday trading week, and refreshes the current day's values from live Shoonya ticks.
 
-Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. The Volume value is the sum of daily volumes for the current week, with today's cumulative live volume replacing the historical value for today. This sheet is a current-week summary per subscribed terminal symbol; it does not place or modify orders.
+Columns: Symbol, Exchange, Week Start, Week End, Open, High, Low, Close, Volume, Last Update. The Volume value is the sum of daily volumes for the current week, with today's cumulative live volume replacing the historical value for today. This sheet is a current-week summary for the symbols selected in `WEEKLY_DATA!A4:A1000`; it does not place or modify orders.
 
 
 ### Weekly symbol selection and row layout
