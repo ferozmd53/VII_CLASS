@@ -15,74 +15,76 @@ import pandas as pd
 
 
 def fetch_bse_sensex_history(start_date, end_date):
-    """Fallback daily OHLC history for BSE:SENSEX from BSE India's index archive."""
-    import io
+    """Fetch SENSEX daily OHLCV from Yahoo Finance when Shoonya history is incomplete."""
     import requests
+    from datetime import timezone, timedelta
 
-    url = "https://api.bseindia.com/BseIndiaAPI/api/ProduceCSVForDate/w"
+    # Yahoo Finance's chart endpoint publishes the BSE Sensex index as ^BSESN.
+    # Use India-local date boundaries and try both Yahoo chart hosts.
+    india_tz = timezone(timedelta(hours=5, minutes=30))
+    start_local = datetime(
+        start_date.year, start_date.month, start_date.day, tzinfo=india_tz
+    )
+    end_local = datetime(
+        end_date.year, end_date.month, end_date.day, tzinfo=india_tz
+    ) + timedelta(days=1)
+
     params = {
-        "strIndex": "SENSEX",
-        "dtFromDate": start_date.strftime("%d/%m/%Y"),
-        "dtToDate": end_date.strftime("%d/%m/%Y"),
-        "period": "D",
+        "period1": int(start_local.timestamp()),
+        "period2": int(end_local.timestamp()),
+        "interval": "1d",
+        "events": "history",
     }
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        "Accept": "text/csv,application/json,text/plain,*/*",
-        "Referer": "https://www.bseindia.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json",
     }
-    response = requests.get(url, params=params, headers=headers, timeout=20)
-    response.raise_for_status()
-    body = response.text.strip()
-    if not body:
-        raise ValueError("BSE index archive returned an empty response")
+    errors = []
+    payload = None
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        url = f"https://{host}/v8/finance/chart/%5EBSESN"
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=25)
+            response.raise_for_status()
+            data = response.json()
+            chart = data.get("chart", {})
+            if chart.get("error"):
+                raise ValueError(str(chart["error"]))
+            results = chart.get("result") or []
+            if not results:
+                raise ValueError("Yahoo Finance returned no chart result")
+            payload = results[0]
+            break
+        except Exception as exc:
+            errors.append(f"{host}: {exc}")
 
-    try:
-        payload = response.json()
-        if isinstance(payload, dict):
-            payload = payload.get("Table") or payload.get("data") or payload.get("Data") or payload
-        frame = pd.DataFrame(payload if isinstance(payload, list) else [payload])
-    except Exception:
-        frame = pd.read_csv(io.StringIO(body))
+    if payload is None:
+        raise RuntimeError("Yahoo Finance SENSEX history failed: " + " | ".join(errors))
 
-    if frame.empty:
-        raise ValueError("BSE index archive returned no SENSEX rows")
+    timestamps = payload.get("timestamp") or []
+    quote_rows = (payload.get("indicators", {}).get("quote") or [{}])[0]
+    if not timestamps:
+        raise ValueError("Yahoo Finance returned no SENSEX daily timestamps")
 
-    normalized = {
-        str(column).strip().lower().replace("_", " ").replace("-", " "): column
-        for column in frame.columns
-    }
-    def find_column(*names):
-        for name in names:
-            if name in normalized:
-                return normalized[name]
-        return None
+    def values(name):
+        return quote_rows.get(name) or [None] * len(timestamps)
 
-    date_col = find_column("date", "datetime", "time", "trade date", "index date")
-    open_col = find_column("open", "open value", "index open")
-    high_col = find_column("high", "high value", "index high")
-    low_col = find_column("low", "low value", "index low")
-    close_col = find_column("close", "close value", "index close", "closing")
-    if not all((date_col, open_col, high_col, low_col, close_col)):
-        raise ValueError(f"Unrecognized BSE SENSEX history columns: {list(frame.columns)}")
-
-    result = pd.DataFrame({
-        "datetime": pd.to_datetime(frame[date_col], dayfirst=True, errors="coerce"),
-        "open": pd.to_numeric(frame[open_col], errors="coerce"),
-        "high": pd.to_numeric(frame[high_col], errors="coerce"),
-        "low": pd.to_numeric(frame[low_col], errors="coerce"),
-        "close": pd.to_numeric(frame[close_col], errors="coerce"),
+    frame = pd.DataFrame({
+        "datetime": pd.to_datetime(timestamps, unit="s", utc=True)
+                      .tz_convert("Asia/Kolkata").tz_localize(None).normalize(),
+        "open": values("open"),
+        "high": values("high"),
+        "low": values("low"),
+        "close": values("close"),
+        "volume": values("volume"),
     })
-    volume_col = find_column("volume", "total traded quantity", "traded quantity")
-    result["volume"] = (
-        pd.to_numeric(frame[volume_col], errors="coerce")
-        if volume_col else 0
-    )
-    result = result.dropna(subset=["datetime", "open", "high", "low", "close"])
-    result = result.sort_values("datetime").drop_duplicates("datetime").reset_index(drop=True)
-    if result.empty:
-        raise ValueError("BSE index archive response contained no valid OHLC candles")
-    return result
+    for column in ("open", "high", "low", "close", "volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["datetime", "open", "high", "low", "close"])
+    frame = frame.sort_values("datetime").drop_duplicates("datetime").reset_index(drop=True)
+    if frame.empty:
+        raise ValueError("Yahoo Finance response contained no valid SENSEX OHLC candles")
+    return frame
 
 
 class IndicatorEngine:
