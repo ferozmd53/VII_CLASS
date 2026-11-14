@@ -94,7 +94,7 @@ The  main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIV
 
 The `Intraday_Indicators.py` module creates a separate `INTRADAY` worksheet without changing the existing daily indicators or trading/order columns. Symbols are copied from `LIVE_TRADE` when the new sheet is blank; you can also enter symbols in `INTRADAY!A4:A1000` using `EXCHANGE:TRADINGSYMBOL` format.
 
-The sheet displays 1-minute and 5-minute OHLCV, `upperpink`, and `mirrorUpperBand`. Indicator settings and the number of history days are editable in rows 1 and 2. Enter a full historical candle date and time in `INTRADAY!N1` using `dd-mm-yyyy hh:mm` format (example: `14-11-2026 10:15`) to inspect that candle; clear `N1` to return to live values. Separate 1m and 5m candle timestamps are displayed beside their OHLCV and indicator values.
+The sheet displays 1-minute and 5-minute OHLCV, `upperpink`, and `mirrorUpperBand`. Indicator settings and the number of history days are editable in rows 1 and 2. Separate 1m and 5m broker candle timestamps are displayed beside their OHLCV and indicator values.
 
 History downloads run asynchronously and the live sheet refreshes about once per second. Both timeframes use Shoonya's timestamped historical candles as the source of truth; the engine does not invent candles from the PC clock or WebSocket LTP. The ATR channel needs sufficient warm-up history; values remain blank until enough valid candles are available. This module does not place or modify orders.
 
