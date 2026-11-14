@@ -365,16 +365,26 @@ class IntradayIndicatorEngine:
         except Exception as save_error:
             print(f"INDICATOR worksheet created but workbook save failed: {save_error}")
         try:
-            source = next(
-                (item for item in workbook.sheets
-                 if item.name in ("LIVE_TRADE", "Trade_Terminal")),
-                None,
-            )
-            if source is not None:
-                sheet.range("A4:A1000").value = source.range("A4:A1000").value
+            # Seed symbols whenever INDICATOR is empty, including a sheet that
+            # was created manually or left blank during an earlier startup.
+            current_symbols = sheet.range("A4:A1000").value or []
+            has_symbols = any(str(value or "").strip() for value in current_symbols)
+            if not has_symbols:
+                source = next(
+                    (item for item in workbook.sheets
+                     if item.name in ("LIVE_TRADE", "Trade_Terminal")),
+                    None,
+                )
+                if source is not None:
+                    source_symbols = source.range("A4:A1000").value
+                    if any(str(value or "").strip() for value in (source_symbols or [])):
+                        sheet.range("A4:A1000").value = source_symbols
+                        print("Copied symbols from LIVE_TRADE into INDICATOR!A4:A1000.")
+                    else:
+                        print("INDICATOR created; add EXCHANGE:TRADINGSYMBOL values in column A.")
         except Exception as exc:
             print(f"Could not seed INDICATOR symbols from LIVE_TRADE: {exc}")
-        return sheet, True
+        return sheet, is_new
 
     def refresh_from_excel(
         self, workbook, api, subscribe_callback, quote_callback, token_callback
