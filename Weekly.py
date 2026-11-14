@@ -72,16 +72,19 @@ class WeeklyDataEngine:
 
         if "datetime" not in frame and "epoch" in frame:
             epoch = pd.to_numeric(frame["epoch"], errors="coerce")
-            frame["datetime"] = pd.to_datetime(epoch, unit="s", errors="coerce")
+            frame["datetime"] = pd.to_datetime(
+                epoch, unit="s", utc=True, errors="coerce"
+            ).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
         elif "datetime" in frame:
             parsed = frame["datetime"].map(
                 lambda value: pd.to_datetime(value, dayfirst=True, errors="coerce")
             )
             if "epoch" in frame:
                 epoch = pd.to_numeric(frame["epoch"], errors="coerce")
-                parsed = parsed.fillna(
-                    pd.to_datetime(epoch, unit="s", errors="coerce")
-                )
+                epoch_ist = pd.to_datetime(
+                    epoch, unit="s", utc=True, errors="coerce"
+                ).dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+                parsed = parsed.fillna(epoch_ist)
             frame["datetime"] = parsed
 
         required = ("datetime", "open", "high", "low", "close")
@@ -182,10 +185,16 @@ class WeeklyDataEngine:
             self.history[key] = frame
         return frame
 
-    def update(self, api, exchange, symbol, quote):
+    def update(self, api, exchange, symbol, quote=None):
+        """Build weekly OHLCV only from timestamped broker daily candles.
+
+        Do not overwrite broker history with WebSocket LTP or create a candle
+        from the PC date. If today's broker candle is not available yet, the
+        newest available broker candle remains the source of truth.
+        """
         exchange = str(exchange or "").strip().upper()
         symbol = str(symbol or "").strip().upper()
-        if not exchange or not symbol or not isinstance(quote, dict):
+        if not exchange or not symbol:
             return None
 
         key = f"{exchange}|{symbol}"
@@ -193,47 +202,22 @@ class WeeklyDataEngine:
         if frame is None or frame.empty:
             return None
 
-        now = datetime.now()
-        today = now.date()
-        ltp = self._number(quote.get("lp"))
-        if ltp is None or ltp <= 0:
+        frame = frame.copy()
+        frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+        frame = frame.dropna(subset=["datetime"]).sort_values("datetime")
+        frame = frame.drop_duplicates("datetime", keep="last").reset_index(drop=True)
+        if frame.empty:
             return None
 
-        frame = frame.copy()
-        day_mask = frame["datetime"].dt.date == today
-        day_rows = frame.index[day_mask]
-        day_open = self._number(quote.get("o"))
-        day_high = self._number(quote.get("h"))
-        day_low = self._number(quote.get("l"))
-        day_volume = self._number(quote.get("v"))
-
-        if len(day_rows):
-            row_index = day_rows[-1]
-            old = frame.loc[row_index]
-            frame.loc[row_index, "open"] = day_open if day_open is not None else old["open"]
-            frame.loc[row_index, "high"] = max(
-                value for value in (self._number(old["high"]), day_high, ltp)
-                if value is not None
-            )
-            frame.loc[row_index, "low"] = min(
-                value for value in (self._number(old["low"]), day_low, ltp)
-                if value is not None
-            )
-            frame.loc[row_index, "close"] = ltp
-            if day_volume is not None:
-                frame.loc[row_index, "volume"] = day_volume
-        else:
-            frame = pd.concat([frame, pd.DataFrame([{
-                "datetime": pd.Timestamp(today),
-                "open": day_open if day_open is not None else ltp,
-                "high": max(day_high, ltp) if day_high is not None else ltp,
-                "low": min(day_low, ltp) if day_low is not None else ltp,
-                "close": ltp,
-                "volume": day_volume if day_volume is not None else 0
-            }])], ignore_index=True)
-
-        frame = frame.sort_values("datetime").reset_index(drop=True)
-        self.history[key] = frame
+        # Keep only valid broker OHLC rows. No live quote or local-time candle
+        # is inserted here; the latest broker candle controls the active week.
+        for column in ("open", "high", "low", "close", "volume"):
+            if column not in frame:
+                frame[column] = 0
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = frame.dropna(subset=["open", "high", "low", "close"])
+        if frame.empty:
+            return None
 
         frame["week"] = frame["datetime"].dt.to_period("W-SUN")
         weekly = frame.groupby("week", sort=True).agg(
@@ -243,12 +227,14 @@ class WeeklyDataEngine:
             close=("close", "last"),
             volume=("volume", "sum")
         )
-        current_week = pd.Timestamp(today).to_period("W-SUN")
-        if current_week not in weekly.index:
+        latest_week = frame["datetime"].iloc[-1].to_period("W-SUN")
+        if latest_week not in weekly.index:
             return None
-        candle = weekly.loc[current_week]
-        week_start = current_week.start_time.date()
+
+        candle = weekly.loc[latest_week]
+        week_start = latest_week.start_time.date()
         week_end = week_start + timedelta(days=4)
+        latest_candle_time = frame["datetime"].iloc[-1]
         self.latest_rows[key] = [
             exchange, week_start.strftime("%d/%m/%Y"),
             week_end.strftime("%d/%m/%Y"),
@@ -257,7 +243,7 @@ class WeeklyDataEngine:
             round(float(candle["low"]), 4),
             round(float(candle["close"]), 4),
             int(candle["volume"]) if pd.notna(candle["volume"]) else 0,
-            now.strftime("%d/%m/%Y %H:%M")
+            latest_candle_time.strftime("%d/%m/%Y %H:%M")
         ]
         return self.latest_rows[key]
 
