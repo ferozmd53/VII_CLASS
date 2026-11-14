@@ -409,6 +409,17 @@ class IntradayIndicatorEngine:
                     for col_number, default_value in enumerate(defaults, start=1):
                         if existing[col_number - 1] in (None, ""):
                             sheet.range((row_number, col_number)).value = default_value
+                # Migrate the previous built-in defaults to the TradingView values
+                # confirmed by the user, while preserving other custom Excel inputs.
+                try:
+                    old_mirror_multiplier = float(sheet.range("J1").value)
+                    if old_mirror_multiplier == 1.7:
+                        sheet.range("J1").value = 0.5
+                except (TypeError, ValueError):
+                    pass
+                if str(sheet.range("B2").value or "").strip().lower() == "high":
+                    sheet.range("B2").value = "low"
+
                 # No manual candle-time selector: timestamps always come from Shoonya.
                 sheet.range("M1:N1").clear_contents()
                 sheet.range("A3:R3").value = [self.HEADERS]
