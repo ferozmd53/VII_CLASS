@@ -150,8 +150,8 @@ class IntradayIndicatorEngine:
         "1m upperpink", "1m mirrorUpperBand",
         "5m Candle Time", "5m Open", "5m High", "5m Low", "5m Close", "5m Volume",
         "5m upperpink", "5m mirrorUpperBand",
-        "1m upperpink (2nd-last)", "1m mirrorUpperBand (2nd-last)",
-        "5m upperpink (2nd-last)", "5m mirrorUpperBand (2nd-last)",
+        "1m upperpink (2nd-last)", "5m upperpink (2nd-last)",
+        "1m mirrorUpperBand (2nd-last)", "5m mirrorUpperBand (2nd-last)",
         "LTP",
     ]
     INPUTS = [
@@ -687,8 +687,8 @@ class IntradayIndicatorEngine:
                     [symbol]
                     + timeframe_values(one_minute)
                     + timeframe_values(five_minute)
-                    + list(one_previous)
-                    + list(five_previous)
+                    + [one_previous[0], five_previous[0],
+                       one_previous[1], five_previous[1]]
                     + [ltp]
                 )
 
