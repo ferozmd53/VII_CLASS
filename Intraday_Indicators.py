@@ -4,11 +4,11 @@ The engine consumes Shoonya intraday candles in background workers and folds the
 latest WebSocket LTP into the currently forming candle. Excel is only touched by
 refresh_from_excel(), which is called by the terminal's main Excel thread.
 
-Pine conversions:
-1) Mirror Upper Band: SMA(high, 5) - 0.5 * population_stdev(high, 5),
+Pine conversions from the user's verified TradingView reference:
+1) Mirror Upper Band: SMA(low, 5) - (-0.3) * population_stdev(low, 5),
    mirrored around the current candle open.
-2) ATR Step Channel: highest(ATR(200), 100) * 0.7 channel width, with the
-   confirmed-bar step state and live provisional fakeout checks.
+2) ATR Step Channel: highest(ATR(200), 100) * 0.7 channel width, seeded
+   at bar_index 200; only confirmed candles can move the step.
 """
 import time
 
@@ -129,14 +129,14 @@ import pandas as pd
 
 class IntradayIndicatorEngine:
     SUPPORTED_INTERVALS = (1, 5)
-    HISTORY_DAYS = 7
+    HISTORY_DAYS = 60
     RETRY_SECONDS = 60
     REFRESH_SECONDS = 1.0
     HISTORY_REFRESH_SECONDS = 60
 
     # Pine inputs supplied by the user.
     MIRROR_LENGTH = 5
-    MIRROR_MULTIPLIER = 0.5
+    MIRROR_MULTIPLIER = -0.3
     CHANNEL_WIDTH = 0.7
     CHANNEL_ATR_LENGTH = 200
     CHANNEL_HIGHEST_LENGTH = 100
@@ -151,8 +151,8 @@ class IntradayIndicatorEngine:
         "Data Status",
     ]
     INPUTS = [
-        ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "high",
-         "MIRROR LENGTH", 5, "MIRROR MULT", 0.5, "HISTORY DAYS", 7],
+        ["TIMEFRAME", "1m,5m", "MIRROR SOURCE", "open", "MIRROR SMA SOURCE", "low",
+         "MIRROR LENGTH", 5, "MIRROR MULT", -0.3, "HISTORY DAYS", 60],
         ["CHANNEL SOURCE", "low", "ATR LENGTH", 200, "ATR HIGHEST", 100,
          "CHANNEL MULT", 0.7, "OUTPUT", "OHLCV + upperpink + mirrorUpperBand"],
     ]
@@ -404,7 +404,7 @@ class IntradayIndicatorEngine:
         lower_values = []
         initial_bar = atr_length
         for index in range(len(frame)):
-            previous_step = step_values[index - 1] if index else 0.0
+            previous_step = step_values[index - 1] if index else float("nan")
             width = channel_atr.iloc[index]
             if pd.isna(width):
                 upper = lower = float("nan")
@@ -416,7 +416,7 @@ class IntradayIndicatorEngine:
             confirmed = not (live and index == len(frame) - 1)
             if index == initial_bar:
                 step = source_value
-            elif confirmed and not pd.isna(upper) and (
+            elif confirmed and not pd.isna(upper) and not pd.isna(lower) and (
                 source_value > upper or source_value < lower
             ):
                 step = source_value
@@ -451,7 +451,7 @@ class IntradayIndicatorEngine:
         frame = frame.drop_duplicates("datetime", keep="last").reset_index(drop=True)
         candle = frame.iloc[-1]
         upperpink, mirror_upper = self._calculate(
-            frame, interval, live=False, settings=settings
+            frame, interval, live=True, settings=settings
         )
 
         candle_time = pd.Timestamp(candle["datetime"]).to_pydatetime()
@@ -543,16 +543,22 @@ class IntradayIndicatorEngine:
                     for col_number, default_value in enumerate(defaults, start=1):
                         if existing[col_number - 1] in (None, ""):
                             sheet.range((row_number, col_number)).value = default_value
-                # Migrate the previous built-in defaults to the TradingView values
-                # confirmed by the user, while preserving other custom Excel inputs.
+                # Migrate only the previous built-in defaults to the exact uploaded
+                # TradingView reference values; preserve other custom Excel settings.
                 try:
                     old_mirror_multiplier = float(sheet.range("J1").value)
-                    if old_mirror_multiplier == 1.7:
-                        sheet.range("J1").value = 0.5
+                    if old_mirror_multiplier in (0.5, 1.7):
+                        sheet.range("J1").value = -0.3
                 except (TypeError, ValueError):
                     pass
-                if str(sheet.range("B2").value or "").strip().lower() == "high":
-                    sheet.range("B2").value = "low"
+                if str(sheet.range("F1").value or "").strip().lower() == "high":
+                    sheet.range("F1").value = "low"
+                try:
+                    old_history_days = int(float(sheet.range("L1").value))
+                    if old_history_days == 7:
+                        sheet.range("L1").value = 60
+                except (TypeError, ValueError):
+                    pass
 
                 # No manual candle-time selector: timestamps always come from Shoonya.
                 sheet.range("M1:N1").clear_contents()
