@@ -88,7 +88,7 @@ The old BUY/SELL dropdown is removed. Enter `BUY` in column N or `SELL` in colum
 
 ## Indicators
 
-The Finvasia terminal remains the main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AG:AN`, using daily historical candles and the same indicator formulas. Daily history and indicator calculations are enabled for symbols from NSE, NFO, BSE, BFO, CDS and MCX, provided the symbol is present in `LIVE_TRADE`, resolves to a valid Shoonya instrument token, and Shoonya returns historical candles for it. History downloads run in background workers so the live quote loop is not held up. Derivative contracts may have shorter available history or no candles after expiry; the engine reports unavailable/short history in the console instead of fabricating values.
+The  main engine. RSI, StochRSI, SMA Stoch and Bollinger Bands are added to `LIVE_TRADE` columns `AG:AN`, using daily historical candles and the same indicator formulas. Daily history and indicator calculations are enabled for symbols from NSE, NFO, BSE, BFO, CDS and MCX, provided the symbol is present in `LIVE_TRADE`, resolves to a valid Shoonya instrument token, and Shoonya returns historical candles for it. History downloads run in background workers so the live quote loop is not held up. Derivative contracts may have shorter available history or no candles after expiry; the engine reports unavailable/short history in the console instead of fabricating values.
 
 ## Start
 
@@ -104,7 +104,6 @@ python run.py "C:\\full\\path\\VII_CLASS.xlsm"
 
 ## Source acknowledgements
 
-- Finvasia Excel terminal base: [PythonTraderExcelTradeTerminal](https://github.com/Indian-Algorithmic-Trading-Community/PythonTraderExcelTradeTerminal), `Finvasia` folder.
 - Shoonya OAuth reuse and indicator logic: [Shoonya-Multi-Symbol-Live-Historical-Data-with-Indicators](https://github.com/ferozmd53/Shoonya-Multi-Symbol-Live-Historical-Data-with-Indicators).
 
 The original Finvasia source attribution and license are retained in this repository. This project is an integration; it is not an official Shoonya or Finvasia product.
