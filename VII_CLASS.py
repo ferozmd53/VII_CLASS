@@ -23,6 +23,7 @@ from get_auth import get_auth_code
 from Shoonya_Indicators import IndicatorEngine
 from Weekly import WeeklyDataEngine
 from Intraday_Indicators import IntradayIndicatorEngine
+from MARKET_ORDER import place_market_order
 
 weekly_data_engine = WeeklyDataEngine()
 intraday_indicator_engine = IntradayIndicatorEngine()
@@ -1036,23 +1037,21 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     tradingsymbol = symbol[4:]
     exchange = symbol[:3]
 
-    # Shoonya API rejects MKT orders. MARKET selections are converted to a
-    # buffered, tick-valid LMT by the terminal dispatcher before reaching here.
+    # MARKET is submitted separately through MARKET_ORDER.py using the
+    # Shoonya Web Client host. Existing LIMIT and SL-LMT paths stay unchanged.
     order_type = str(order_type or "").strip().upper()
-    if order_type == "MARKET":
-        print(
-            f"Live order blocked for {tradingsymbol}: MARKET must first be "
-            "converted using a fresh LTP and the instrument tick size."
-        )
-        return None
-    if order_type not in ("LIMIT", "SL-M"):
+    if order_type not in ("MARKET", "LIMIT", "SL-M"):
         print(
             f"Live order blocked for {tradingsymbol}: unsupported order type "
-            f"{order_type!r}; use LIMIT or SL-M."
+            f"{order_type!r}; use MARKET, LIMIT or SL-M."
         )
         return None
 
-    if order_type == 'LIMIT':
+    if order_type == "MARKET":
+        price_type = "MKT"
+        price = 0
+        trigger_price = None
+    elif order_type == 'LIMIT':
         if price is None:
             print(f"LIMIT order blocked for {tradingsymbol}: price is missing.")
             return None
@@ -1124,7 +1123,7 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
                 logger.error(f"Could not display broker order failure: {status_error}")
 
     try:
-        order_response = api.place_order(
+        order_arguments = dict(
             buy_or_sell=buy_or_sell[0],
             product_type=product,
             exchange=exchange,
@@ -1138,6 +1137,12 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
             algo_id=get_shoonya_algo_id(),
             remarks="Python_Trader",
         )
+        if price_type == "MKT":
+            order_response = place_market_order(
+                api, get_terminal_workbook().sheets["LOGIN"], **order_arguments
+            )
+        else:
+            order_response = api.place_order(**order_arguments)
     except Exception as exc:
         Message = f"BROKER SUBMISSION ERROR for {tradingsymbol}: {exc}"
         print(Message)
@@ -1700,14 +1705,9 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             raise ValueError("Select a valid Product Type: MIS, CNC or NRML")
         market_type = str(market_type or "").strip().upper()
         if market_type == "MARKET":
-            # Shoonya rejects API MKT orders. Use the latest LTP plus the
-            # configured safety buffer, rounded to this instrument's exact tick.
-            broker_order_type = "LIMIT"
-            order_price = get_marketable_limit_price(symbol, side, ltp)
-            print(
-                f"{side} MARKET selection converted to Shoonya LMT for {symbol}: "
-                f"LTP={ltp}, limit={order_price}"
-            )
+            # Submit a true MKT order through the separate Web Client adapter.
+            broker_order_type = "MARKET"
+            order_price = 0
         elif market_type == "LIMIT":
             broker_order_type = "LIMIT"
             order_price = _required_positive_number(limit_price, "Limit Price")
@@ -1763,7 +1763,8 @@ def dispatch_terminal_side_order(sheet, row_number, symbol, side, qty, product_t
             raise ValueError("Select Product Type: MIS, CNC or NRML")
         selected_market_type = str(market_type or "").strip().upper()
         if selected_market_type == "MARKET":
-            _required_positive_number(ltp, "Live LTP (waiting for fresh quote)")
+            # A true MARKET order does not require a price/LTP input.
+            pass
         elif selected_market_type == "LIMIT":
             _required_positive_number(limit_price, "Limit Price")
         elif selected_market_type == "SL-LMT":
