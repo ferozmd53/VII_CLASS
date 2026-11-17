@@ -1197,6 +1197,101 @@ def get_order_book():
         print(f"Exception occur in get_order_book : {exc}")
         return empty_order_book
 
+def fetch_and_reconcile_trade_book():
+    """
+    Fetch today's execution-level fills and add each fill exactly once to its
+    parent order in LimitOrderBook. Order Book remains authoritative for status.
+    """
+    global TRADE_BOOK_API_WARNING_SHOWN
+    trade_method = None
+    for method_name in ("get_trade_book", "get_tradebook"):
+        candidate = getattr(api, method_name, None)
+        if callable(candidate):
+            trade_method = candidate
+            break
+    if trade_method is None:
+        if not TRADE_BOOK_API_WARNING_SHOWN:
+            print(
+                "Trade Book reconciliation unavailable: this Shoonya SDK build "
+                "does not expose get_trade_book() or get_tradebook(). "
+                "Order Book and WebSocket status updates remain active."
+            )
+            TRADE_BOOK_API_WARNING_SHOWN = True
+        return 0
+
+    try:
+        raw_trade_book = trade_method()
+        if raw_trade_book is None:
+            return 0
+        if isinstance(raw_trade_book, dict):
+            broker_stat = str(raw_trade_book.get("stat", "")).strip().lower()
+            if broker_stat and broker_stat not in ("ok", "success"):
+                print(
+                    "Shoonya Trade Book was rejected: "
+                    f"{raw_trade_book.get('emsg') or raw_trade_book}"
+                )
+                return 0
+            if isinstance(raw_trade_book.get("values"), list):
+                raw_trade_book = raw_trade_book["values"]
+            elif raw_trade_book.get("norenordno") and raw_trade_book.get("flid"):
+                raw_trade_book = [raw_trade_book]
+            else:
+                return 0
+
+        if not isinstance(raw_trade_book, (list, tuple)):
+            return 0
+
+        new_fills = 0
+        for fill in raw_trade_book:
+            if not isinstance(fill, dict):
+                continue
+            order_id = str(fill.get("norenordno") or "").strip()
+            fill_id = str(fill.get("flid") or "").strip()
+            if not order_id or not fill_id:
+                continue
+            try:
+                fill_qty = float(fill.get("flqty") or 0)
+                fill_price = float(fill.get("flprc") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(fill_qty) or not np.isfinite(fill_price):
+                continue
+            if fill_qty <= 0 or fill_price <= 0:
+                continue
+
+            # flid identifies an execution; pair it with its parent order for
+            # defensive deduplication across SDK/account implementations.
+            fill_key = (order_id, fill_id)
+            with TRADE_BOOK_FILL_LOCK:
+                if fill_key in TRADE_BOOK_FILL_IDS:
+                    continue
+                TRADE_BOOK_FILL_IDS.add(fill_key)
+
+            with SIDE_ORDER_TRACKER_LOCK:
+                tracked = LimitOrderBook.setdefault(
+                    order_id,
+                    {"status": "PENDING", "Remarks": None, "Executed_price": None},
+                )
+                tracked["Trade_Fill_Count"] = int(tracked.get("Trade_Fill_Count", 0)) + 1
+                tracked["Trade_Filled_Quantity"] = float(
+                    tracked.get("Trade_Filled_Quantity", 0) or 0
+                ) + fill_qty
+                tracked["Trade_Filled_Value"] = float(
+                    tracked.get("Trade_Filled_Value", 0) or 0
+                ) + (fill_qty * fill_price)
+                tracked["Trade_Average_Price"] = (
+                    tracked["Trade_Filled_Value"] / tracked["Trade_Filled_Quantity"]
+                )
+            new_fills += 1
+
+        if new_fills:
+            print(f"Shoonya Trade Book reconciliation: {new_fills} new execution fill(s).")
+        return new_fills
+    except Exception as exc:
+        print(f"Trade Book reconciliation failed without stopping live quotes/orders: {exc}")
+        return 0
+
+
 def GetToken_UsingSymbol(exchange, tradingsymbol):
     global df_ins_NSE, df_ins_BSE, df_ins_NFO, df_ins_CDS, df_ins_MCX, df_ins_BFO
     global api
@@ -1406,6 +1501,9 @@ def _watch_new_symbol_subscription(symbol, exchange, token):
         print(f"Subscription watchdog error for {symbol} ({token_key}): {exc}")
 
 LimitOrderBook = {}
+TRADE_BOOK_FILL_IDS = set()
+TRADE_BOOK_FILL_LOCK = Lock()
+TRADE_BOOK_API_WARNING_SHOWN = False
 SIDE_ORDER_UPDATE_QUEUE = queue.Queue()
 SIDE_ORDER_TRACKER = {}
 SIDE_ORDER_TRACKER_LOCK = Lock()
@@ -3720,9 +3818,10 @@ def start_Open_Position():
             if not is_excel_connection_lost():
                 print(f"Exception occur in Holdings : {e}")
             pass
+        df_orderbook = pd.DataFrame()
         try:
             # Refresh OrderBook continuously, even when another Excel sheet is active.
-            # Excel can update an inactive worksheet directly; do not gate this on the active tab.
+            # Reuse this one broker snapshot below; avoid a second REST poll per loop.
             df_orderbook = get_order_book()
             if (len(df_orderbook) > 0):
                 op_ob.range("b1").options(index=False,header=True).value = df_orderbook
@@ -3742,7 +3841,8 @@ def start_Open_Position():
             pass
         try:
             process_side_order_updates()
-            order_book_snapshot = get_order_book()
+            fetch_and_reconcile_trade_book()
+            order_book_snapshot = df_orderbook
             for key, value in list(LimitOrderBook.items()):
                 if value.get('status') not in ('COMPLETE', 'REJECTED', 'CANCELLED', 'CANCELED'):
                     status, Executed_price = order_status(key, order_book_snapshot)
