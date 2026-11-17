@@ -1202,7 +1202,11 @@ def fetch_and_reconcile_trade_book():
     Fetch today's execution-level fills and add each fill exactly once to its
     parent order in LimitOrderBook. Order Book remains authoritative for status.
     """
-    global TRADE_BOOK_API_WARNING_SHOWN
+    global TRADE_BOOK_API_WARNING_SHOWN, TRADE_BOOK_LAST_POLL
+    now = _monotonic()
+    if now - TRADE_BOOK_LAST_POLL < 2.0:
+        return 0
+    TRADE_BOOK_LAST_POLL = now
     trade_method = None
     for method_name in ("get_trade_book", "get_tradebook"):
         candidate = getattr(api, method_name, None)
@@ -1504,6 +1508,7 @@ LimitOrderBook = {}
 TRADE_BOOK_FILL_IDS = set()
 TRADE_BOOK_FILL_LOCK = Lock()
 TRADE_BOOK_API_WARNING_SHOWN = False
+TRADE_BOOK_LAST_POLL = 0.0
 SIDE_ORDER_UPDATE_QUEUE = queue.Queue()
 SIDE_ORDER_TRACKER = {}
 SIDE_ORDER_TRACKER_LOCK = Lock()
