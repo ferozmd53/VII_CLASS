@@ -534,7 +534,7 @@ def get_shoonya_algo_id():
 
 
 def get_market_safety_percent():
-    """Read and validate the SL-LMT safety buffer from LOGIN!B24."""
+    """Read and validate the marketable-limit safety buffer from LOGIN!B24."""
     login_sheet = get_login_settings_sheet(get_terminal_workbook())
     raw_value = login_sheet.range("B24").value
     try:
@@ -545,6 +545,52 @@ def get_market_safety_percent():
         raise RuntimeError("LOGIN!B24 Market Safety must be between 0 and 10.")
     login_sheet.range("B24").value = value
     return value
+
+
+def get_instrument_tick_size(exchange, tradingsymbol):
+    """Resolve the exact exchange tick size from the downloaded Shoonya master."""
+    exchange = str(exchange or "").strip().upper()
+    tradingsymbol = str(tradingsymbol or "").strip().upper()
+    master_name = {
+        "NSE": "df_ins_NSE", "BSE": "df_ins_BSE", "NFO": "df_ins_NFO",
+        "BFO": "df_ins_BFO", "CDS": "df_ins_CDS", "MCX": "df_ins_MCX",
+    }.get(exchange)
+    master = globals().get(master_name) if master_name else None
+    if master is None or getattr(master, "empty", True):
+        raise RuntimeError(f"{exchange} instrument master is not loaded; cannot safely determine tick size.")
+    if "TradingSymbol" not in master.columns or "TickSize" not in master.columns:
+        raise RuntimeError(f"{exchange} instrument master has no TickSize column; marketable-limit order blocked.")
+    matches = master[
+        master["TradingSymbol"].astype(str).str.strip().str.upper() == tradingsymbol
+    ]
+    if matches.empty:
+        raise RuntimeError(f"Tick size not found for {exchange}:{tradingsymbol}; order blocked.")
+    tick_size = _required_positive_number(matches.iloc[0]["TickSize"], "Instrument TickSize")
+    return tick_size
+
+
+def get_marketable_limit_price(symbol, side, ltp):
+    """Convert a MARKET selection to a tick-valid, buffered Shoonya LMT price."""
+    symbol = str(symbol or "").strip().upper()
+    if ":" not in symbol:
+        raise ValueError(f"Expected EXCHANGE:TRADINGSYMBOL, received {symbol!r}")
+    exchange, tradingsymbol = symbol.split(":", 1)
+    side = str(side or "").strip().upper()
+    if side not in ("BUY", "SELL"):
+        raise ValueError("Order side must be BUY or SELL.")
+    last_price = _required_positive_number(ltp, "Fresh Live LTP")
+    tick_size = get_instrument_tick_size(exchange, tradingsymbol)
+    safety_percent = get_market_safety_percent()
+    if side == "BUY":
+        raw_limit = last_price * (1.0 + safety_percent / 100.0)
+        tick_count = int(np.ceil((raw_limit / tick_size) - 1e-10))
+    else:
+        raw_limit = last_price * (1.0 - safety_percent / 100.0)
+        tick_count = int(np.floor((raw_limit / tick_size) + 1e-10))
+    limit_price = round(tick_count * tick_size, 8)
+    if not np.isfinite(limit_price) or limit_price <= 0:
+        raise ValueError(f"Calculated {side} limit price is invalid ({limit_price}).")
+    return limit_price
 
 
 def _shoonya_login_once():
@@ -990,24 +1036,23 @@ def place_trade(symbol, quantity, buy_or_sell, order_type = None, price = None, 
     tradingsymbol = symbol[4:]
     exchange = symbol[:3]
 
-    # Only MARKET, LIMIT and SL-M are supported. Anything else is blocked here
-    # so price_type/trigger_price can never be left undefined.
+    # Shoonya API rejects MKT orders. MARKET selections are converted to a
+    # buffered, tick-valid LMT by the terminal dispatcher before reaching here.
     order_type = str(order_type or "").strip().upper()
-    if order_type not in ("MARKET", "LIMIT", "SL-M"):
+    if order_type == "MARKET":
+        print(
+            f"Live order blocked for {tradingsymbol}: MARKET must first be "
+            "converted using a fresh LTP and the instrument tick size."
+        )
+        return None
+    if order_type not in ("LIMIT", "SL-M"):
         print(
             f"Live order blocked for {tradingsymbol}: unsupported order type "
-            f"{order_type!r}; use MARKET, LIMIT or SL-M."
+            f"{order_type!r}; use LIMIT or SL-M."
         )
         return None
 
-    if order_type == 'MARKET':
-        # A MARKET selection must reach Shoonya as a true MKT order.
-        # Do not convert it to LMT at the last traded price; that can leave
-        # the order pending whenever the best bid/ask moves away from the LTP.
-        price = 0.0
-        trigger_price = None
-        price_type = "MKT"
-    elif order_type == 'LIMIT':
+    if order_type == 'LIMIT':
         if price is None:
             print(f"LIMIT order blocked for {tradingsymbol}: price is missing.")
             return None
@@ -1655,10 +1700,14 @@ def _execute_terminal_side_order(row_number, symbol, side, qty, product_type,
             raise ValueError("Select a valid Product Type: MIS, CNC or NRML")
         market_type = str(market_type or "").strip().upper()
         if market_type == "MARKET":
-            # The dispatcher validates that a fresh LTP exists before queueing.
-            # Submit the broker's actual MARKET order, not a LIMIT at that LTP.
-            broker_order_type = "MARKET"
-            order_price = 0.0
+            # Shoonya rejects API MKT orders. Use the latest LTP plus the
+            # configured safety buffer, rounded to this instrument's exact tick.
+            broker_order_type = "LIMIT"
+            order_price = get_marketable_limit_price(symbol, side, ltp)
+            print(
+                f"{side} MARKET selection converted to Shoonya LMT for {symbol}: "
+                f"LTP={ltp}, limit={order_price}"
+            )
         elif market_type == "LIMIT":
             broker_order_type = "LIMIT"
             order_price = _required_positive_number(limit_price, "Limit Price")
@@ -3680,8 +3729,6 @@ def CloseTrade():
     print("I am inside CloseTrade")
     try:
         df_open_position_net,OverAllPnL  = get_position()
-        price_type = "MKT"
-        price = 0.0
         df_open_position_net['Net Quantity'] = df_open_position_net['Net Quantity'].astype('int')
         df_open_position_net = df_open_position_net[df_open_position_net['Net Quantity']!= 0 ]
         if(len(df_open_position_net) > 0):
@@ -3696,8 +3743,11 @@ def CloseTrade():
                             tradingsymbol=df_position_net_short['Symbol'][ind],
                             quantity=abs(df_position_net_short['Net Quantity'][ind]),
                             discloseqty=0,
-                            price_type=price_type,
-                            price=price,
+                            price_type="LMT",
+                            price=get_marketable_limit_price(
+                                str(df_position_net_short['Exchange'][ind]) + ":" + str(df_position_net_short['Symbol'][ind]),
+                                "BUY", df_position_net_short['Last Price'][ind]
+                            ),
                             trigger_price=None,
                             retention="DAY",
                             algo_id=get_shoonya_algo_id(),
@@ -3717,8 +3767,11 @@ def CloseTrade():
                             tradingsymbol=df_position_net_long['Symbol'][ind],
                             quantity=abs(df_position_net_long['Net Quantity'][ind]),
                             discloseqty=0,
-                            price_type=price_type,
-                            price=price,
+                            price_type="LMT",
+                            price=get_marketable_limit_price(
+                                str(df_position_net_long['Exchange'][ind]) + ":" + str(df_position_net_long['Symbol'][ind]),
+                                "SELL", df_position_net_long['Last Price'][ind]
+                            ),
                             trigger_price=None,
                             retention="DAY",
                             algo_id=get_shoonya_algo_id(),
@@ -3800,12 +3853,15 @@ def start_Open_Position():
                                     quantity = abs(df_openPosition['Net Quantity'][i])
                                     product_type = df_openPosition['Product'][i]
                                     tag = "PT individual Exit"
-                                    price_type = "MKT"
-                                    price = 0.0
                                     try:
                                         if not BROKER_LOGIN_OK or not internet_is_available() or SYSTEM_EXCEL_OK is False:
                                             raise RuntimeError("Live square-off blocked: broker login, internet or Excel unavailable")
-                                        api.place_order(buy_or_sell=buy_or_sell,product_type=product_type,exchange=exchange,tradingsymbol=tradingsymbol,quantity=quantity,discloseqty=0,price_type=price_type,price=price,trigger_price=None,retention="DAY",remarks=tag,algo_id=get_shoonya_algo_id())
+                                        squareoff_side = "BUY" if buy_or_sell == "B" else "SELL"
+                                        squareoff_price = get_marketable_limit_price(
+                                            str(exchange) + ":" + str(tradingsymbol),
+                                            squareoff_side, df_openPosition['Last Price'][i]
+                                        )
+                                        api.place_order(buy_or_sell=buy_or_sell,product_type=product_type,exchange=exchange,tradingsymbol=tradingsymbol,quantity=quantity,discloseqty=0,price_type="LMT",price=squareoff_price,trigger_price=None,retention="DAY",remarks=tag,algo_id=get_shoonya_algo_id())
                                     except Exception as e:
                                         print(f"squareoff can't be done for {df_openPosition['Symbol'][i]} with reason : {e}")
                                         pass
